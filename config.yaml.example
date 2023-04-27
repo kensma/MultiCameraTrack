@@ -1,0 +1,34 @@
+sourceType: webcam
+
+sources:
+  - name: cam1
+    source: rtsp://host/stream0
+    skip: 1
+  - name: cam2
+    source: rtsp://host/stream0
+    skip: 1
+
+detector:
+  weights: yolov7.pt 
+  device: '2' 
+  imgsz: 512 
+  half: True
+  batch_size: 64
+  trace: True
+  conf_thres: 0.5 
+  iou_thres: 0.45
+  classes: [ 0 ]
+  agnostic_nms: True
+
+tracker:
+  track_thresh: 0.5
+  track_buffer: 30
+  match_thresh: 0.8
+
+reid: Base-bagtricks.yml
+
+MultiSourceTracker:
+  predictor_config: Base-bagtricks.yml
+  max_target_lost: 300
+  match_thres: 0.09
+
