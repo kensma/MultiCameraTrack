@@ -1,7 +1,7 @@
 import threading
 import queue
 import time
-from yolov7.detect import Detect
+from yolov7.detect import Detect, AsyncDetect
 import numpy as np
 from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
@@ -29,12 +29,13 @@ class TrackPipelineThread(threading.Thread):
     def __init__(self, config):
         threading.Thread.__init__(self)
         self.config = config
-        self.queue_size = self.config['detector']['batch_size']
+        self.queue_size = self.config['detector']['batch_size'] * self.config['detector']['num_detect']
         self.queue = queue.Queue(self.queue_size)
         self.is_stop = False
         self.result = {}
         self.put_queue_threads = []
-        self.detect = Detect(**self.config['detector'])
+        self.detect = AsyncDetect(AttrDict(self.config['detector']))
+        # self.detect = Detect(AttrDict(self.config['detector']))
         self.trackers = {}
 
     def run(self):
@@ -63,9 +64,6 @@ class TrackPipelineThread(threading.Thread):
 
     def get_result(self, name):
         return self.result[name].get()
-    
-    def get_names(self):
-        return self.detect.get_names()
 
     def stop(self):
         self.is_stop = True

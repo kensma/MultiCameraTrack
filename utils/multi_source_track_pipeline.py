@@ -43,7 +43,6 @@ class MultiSourceTrackPipeline(threading.Thread):
 
             res = self.multi_source_tracker.update(results)
             for name in self.source_names:
-                # r = list(map(lambda x: (x.prev.origin if x.prev else None, x.match_conf), res[name]))
                 self.results[name].put((*results[name], res[name]))
 
     def stop(self):
@@ -51,6 +50,3 @@ class MultiSourceTrackPipeline(threading.Thread):
 
     def get_result(self, name):
         return self.results[name].get()
-
-    def get_names(self):
-        return self.track_pipeline.get_names()
