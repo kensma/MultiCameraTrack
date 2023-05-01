@@ -361,8 +361,8 @@ class TracedModel(nn.Module):
         
         traced_script_module = torch.jit.trace(self.model, rand_example, strict=False)
         #traced_script_module = torch.jit.script(self.model)
-        traced_script_module.save("traced_model.pt")
-        print(" traced_script_module saved! ")
+        # traced_script_module.save("traced_model.pt")
+        # print(" traced_script_module saved! ")
         self.model = traced_script_module
         self.model.to(device)
         self.detect_layer.to(device)

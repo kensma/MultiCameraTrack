@@ -5,7 +5,9 @@ import sys
 import cv2
 import numpy as np
 import random
-import torch.multiprocessing as mp
+# import torch.multiprocessing as mp
+import threading
+import queue
 
 sys.path.append('./yolov7')
 
@@ -16,9 +18,13 @@ from yolov7.utils.plots import plot_one_box
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import TracedModel
 
+# try:
+#     mp.set_start_method('spawn')
+# except RuntimeError:
+#     pass
+
 class Detect:
     @torch.no_grad()
-    # def __init__(self, weights, device, imgsz=512, half=False, batch_size=1, trace=True, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic_nms=True):
     def __init__(self, cfg):
         self.device = cfg.device
         self._half = cfg.half
@@ -28,7 +34,7 @@ class Detect:
         self._classes = cfg.classes
         self._agnostic_nms = cfg.agnostic_nms
 
-        self.device = select_device(self.device)
+        self.device = torch.device(self.device)
         self._half = self._half and self.device.type != 'cpu'  # half precision only supported on CUDA
 
         # Load model
@@ -75,51 +81,56 @@ class Detect:
     def get_names(self):
         return self._names
     
+
 class AsyncDetect:
 
-    class _DetectWorker(mp.Process):
+    # class _DetectWorker(mp.Process):
+    class _DetectWorker(threading.Thread):
         def __init__(self, in_queue, out_queue, cfg):
+            threading.Thread.__init__(self)
             self.cfg = cfg
 
             self.in_queue = in_queue
             self.out_queue = out_queue
 
-            super().__init__()
+            self.detect = Detect(self.cfg)
+
+            # super().__init__()
             self.start()
 
         def run(self):
-            detect = Detect(self.cfg)
+            # detect = Detect(self.cfg)
 
             while True:
                 idx, imgs  = self.in_queue.get()
-                res = detect(imgs)
+                # res = detect(imgs)
+                res = self.detect(imgs)
                 self.out_queue.put((idx, res))
 
     def __init__(self, cfg):
         self.num_detect = cfg.num_detect
         self.batch_size = cfg.batch_size
         self.imgsz = cfg.imgsz
-        self.in_queue = mp.Queue(self.num_detect)
-        self.out_queue = mp.Queue(self.num_detect)
+        # self.in_queue = mp.Queue(self.num_detect)
+        self.in_queue = queue.Queue(self.num_detect)
+        # self.out_queue = mp.Queue(self.num_detect)
+        self.out_queue = queue.Queue(self.num_detect)
         self.detects = []
-        for _ in range(self.num_detect):
+        self.device = cfg.device
+        for i in range(self.num_detect):
+            cfg.device = self.device[i]
             self.detects.append(self._DetectWorker(self.in_queue, self.out_queue, cfg))
+
+        #  初始化
+        for i in range(self.num_detect):
+            self.__call__(np.zeros((self.batch_size*self.num_detect, self.imgsz, self.imgsz, 3)))
 
     def __call__(self, im0s):
         for i in range(self.num_detect):
             self.in_queue.put((i, im0s[self.batch_size*i:self.batch_size*(i+1)]))
 
-        
-        # res = [None] * self.num_detect
-        # for _ in range(self.num_detect):
-        #     idx, data = self.out_queue.get()
-        #     res[idx] = data
-
-        # return [item for sublist in res for item in sublist]
-
         res = []
         for _ in range(self.num_detect):
             idx, data = self.out_queue.get()
             res[len(data)*idx:len(data)*idx] = data
-        
         return res

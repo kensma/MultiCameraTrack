@@ -20,6 +20,8 @@ class TrackPipelineThread(threading.Thread):
 
         def run(self):
             while not self.is_stop:
+                if pause_queue_name == self.name:
+                    continue
                 img0 = next(self.load_data)
                 self.detect_queue.put((self.name, img0))
 
@@ -34,11 +36,15 @@ class TrackPipelineThread(threading.Thread):
         self.is_stop = False
         self.result = {}
         self.put_queue_threads = []
+        self.source_names = []
         self.detect = AsyncDetect(AttrDict(self.config['detector']))
-        # self.detect = Detect(AttrDict(self.config['detector']))
         self.trackers = {}
 
+        global pause_queue_name
+        pause_queue_name = None
+
     def run(self):
+        global pause_queue_name
         while not self.is_stop:
             if self.queue.full():
                 names = []
@@ -48,7 +54,9 @@ class TrackPipelineThread(threading.Thread):
                     names.append(name)
                     im0s.append(img0)
 
+                # t0 = time.time()
                 pred = self.detect(im0s)
+                # print('detect time: ', time.time() - t0)
 
                 for i in range(len(names)):
                     target_output = self.trackers[names[i]].update(pred[i], im0s[i].shape, im0s[i].shape)
@@ -56,11 +64,27 @@ class TrackPipelineThread(threading.Thread):
 
                     self.result[names[i]].put((im0s[i], pred[i], target))
 
+                    # 防止某個queue太多，導致其他queue都要等待
+                    qsizes = [self.result
+                    [name].qsize() for name in self.source_names]
+                    max_qsize_index = np.argmax(qsizes)
+                    min_qsize_index = np.argmin(qsizes)
+                    if qsizes[max_qsize_index] - qsizes[min_qsize_index] > self.queue_size:
+                        pause_queue_name = self.source_names[max_qsize_index]
+                    else:
+                        pause_queue_name = None
+                    # print("=====================================")
+                    # print("cam1: ", self.result['cam1'].qsize())
+                    # print("cam2: ", self.result['cam2'].qsize())
+                    # print("pause_queue_name: ", pause_queue_name)
+                    # print("=====================================")
+
     def add_put_queue_thread(self, load_data, name):
         self.put_queue_threads.append(
             TrackPipelineThread.PutQueueThread(self.queue, load_data, name))
-        self.result[name] = queue.Queue(self.queue_size)
+        self.result[name] = queue.Queue(self.queue_size*3) # 自少要有三倍的空間，不然會卡住
         self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']))
+        self.source_names.append(name)
 
     def get_result(self, name):
         return self.result[name].get()
