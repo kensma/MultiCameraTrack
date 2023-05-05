@@ -5,9 +5,11 @@ import sys
 import cv2
 import numpy as np
 import random
-# import torch.multiprocessing as mp
-import threading
-import queue
+import torch.multiprocessing as mp
+# import multiprocessing as mp
+# import threading
+# import queue
+import time
 
 sys.path.append('./yolov7')
 
@@ -18,10 +20,10 @@ from yolov7.utils.plots import plot_one_box
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import TracedModel
 
-# try:
-#     mp.set_start_method('spawn')
-# except RuntimeError:
-#     pass
+try:
+    mp.set_start_method('spawn')
+except RuntimeError:
+    pass
 
 class Detect:
     @torch.no_grad()
@@ -53,16 +55,8 @@ class Detect:
         self.model(torch.zeros(self._batch_size, 3, self._imgsz, self._imgsz).to(self.device).type_as(next(self.model.parameters())))
 
     @torch.no_grad()
-    def __call__(self, im0s):
-        imgs = []
-        for img in im0s:
-            img, _, _ = letterbox(img, (self._imgsz, self._imgsz), auto=False, scaleup=True)
-            img = img.transpose(2, 0, 1)
-            imgs.append(img)
-
-        imgs = np.array(imgs)
-
-        imgs_tensor = torch.from_numpy(imgs).to(self.device)
+    def __call__(self, im0s, shapes):
+        imgs_tensor = im0s.to(self.device)
 
         imgs_tensor = imgs_tensor.half() if self._half else imgs_tensor.float()
         imgs_tensor /= 255.0
@@ -73,8 +67,8 @@ class Detect:
 
         res = []
         for i, det in enumerate(pred):
-            det[:, :4] = scale_coords(imgs[i].shape[1:], det[:, :4], im0s[i].shape).round()
-            res.append(det.cpu().detach().numpy())
+            det[:, :4] = scale_coords((self._imgsz, self._imgsz), det[:, :4], shapes[i]).round()
+            res.append(det.cpu().numpy())
 
         return res
 
@@ -84,53 +78,63 @@ class Detect:
 
 class AsyncDetect:
 
-    # class _DetectWorker(mp.Process):
-    class _DetectWorker(threading.Thread):
+    class _DetectWorker(mp.Process):
         def __init__(self, in_queue, out_queue, cfg):
-            threading.Thread.__init__(self)
+            mp.Process.__init__(self)
             self.cfg = cfg
 
             self.in_queue = in_queue
             self.out_queue = out_queue
 
-            self.detect = Detect(self.cfg)
-
-            # super().__init__()
-            self.start()
-
         def run(self):
-            # detect = Detect(self.cfg)
+            detect = Detect(self.cfg)
 
             while True:
-                idx, imgs  = self.in_queue.get()
-                # res = detect(imgs)
-                res = self.detect(imgs)
+                idx, imgs, shapes  = self.in_queue.get()
+                res = detect(imgs, shapes)
                 self.out_queue.put((idx, res))
 
     def __init__(self, cfg):
         self.num_detect = cfg.num_detect
         self.batch_size = cfg.batch_size
         self.imgsz = cfg.imgsz
-        # self.in_queue = mp.Queue(self.num_detect)
-        self.in_queue = queue.Queue(self.num_detect)
-        # self.out_queue = mp.Queue(self.num_detect)
-        self.out_queue = queue.Queue(self.num_detect)
+        self.in_queue = mp.Queue(self.num_detect)
+        self.out_queue = mp.Queue(self.num_detect)
         self.detects = []
         self.device = cfg.device
         for i in range(self.num_detect):
             cfg.device = self.device[i]
             self.detects.append(self._DetectWorker(self.in_queue, self.out_queue, cfg))
+            self.detects[-1].start()
 
         #  初始化
         for i in range(self.num_detect):
             self.__call__(np.zeros((self.batch_size*self.num_detect, self.imgsz, self.imgsz, 3)))
 
     def __call__(self, im0s):
+        # print("====================================")
+        # t0 = time.time()
+        imgs = []
+        shapes = []
+        for img in im0s:
+            shapes.append(img.shape)
+            img, _, _ = letterbox(img, (self.imgsz, self.imgsz), auto=False, scaleup=True)
+            img = img.transpose(2, 0, 1)
+            imgs.append(img)
+
+        imgs = np.array(imgs)
+        imgs_tensor = torch.from_numpy(imgs)
+        # print('preprocess time: ', time.time()-t0)
+        # t0 = time.time()
         for i in range(self.num_detect):
-            self.in_queue.put((i, im0s[self.batch_size*i:self.batch_size*(i+1)]))
+            self.in_queue.put((i, imgs_tensor[self.batch_size*i:self.batch_size*(i+1)], shapes[self.batch_size*i:self.batch_size*(i+1)]))
+        # print('put time: ', time.time()-t0)
+        # t0 = time.time()
 
         res = []
         for _ in range(self.num_detect):
             idx, data = self.out_queue.get()
             res[len(data)*idx:len(data)*idx] = data
+        # print('get time: ', time.time()-t0)
+        # print("====================================")
         return res

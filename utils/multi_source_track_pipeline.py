@@ -17,7 +17,7 @@ from utils.multi_source_tracker import MultiSourceTracker
 class BaseMultiSourceTrackPipeline(threading.Thread):
     def __init__(self, config):
         threading.Thread.__init__(self)
-        self.name = 'MultiSourceTrackPipeline'
+        self.name = "MultiSourceTrackPipeline[{}]".format(self.name)
 
         self.track_pipeline = TrackPipelineThread(config)
         self.load_data_threads = {}
@@ -38,9 +38,6 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.shutdown = False
 
         self.multi_source_tracker = MultiSourceTracker(config['MultiSourceTracker'], self.source_names)
-        # self.results = {x:queue.Queue(64) for x in self.source_names}
-        # self.results = queue.Queue(64)
-
     def run(self):
         while not self.shutdown:
             res = {}
@@ -53,7 +50,6 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             for name in self.source_names:
                 img0, pred, _ = single_result[name]
                 res[name] = (img0, pred, multi_result[name]) # img0, pred, target
-            # self.results.put(res)
             '''
             {
             'source1': (img0, pred, target),
@@ -73,11 +69,10 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
 class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
-    class VideoWriter(threading.Thread):
-    # class FileWriter(Process):
+    class FileWriter(threading.Thread):
         def __init__(self, name, load_data):
             threading.Thread.__init__(self)
-            # Process.__init__(self)
+            self.name = "FileWriter[{}]".format(name)
             self.is_run = True
             self.video_writer = None
             self.frame_id = 0
@@ -154,7 +149,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.save_root_path = config['MultiSourceTracker']['save_root_path']
             self.writers = {}
             for key, value in self.load_data_threads.items():
-                self.writers[key] = self.VideoWriter(key, value)
+                self.writers[key] = self.FileWriter(key, value)
                 self.writers[key].start()
 
     def get_datetime(self):

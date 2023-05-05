@@ -29,10 +29,10 @@ class AsyncPredictor:
 
     class _PredictWorker(mp.Process):
         def __init__(self, cfg, task_queue, result_queue):
+            mp.Process.__init__(self)
             self.cfg = cfg
             self.task_queue = task_queue
             self.result_queue = result_queue
-            super().__init__()
 
         def run(self):
             predictor = DefaultPredictor(self.cfg)

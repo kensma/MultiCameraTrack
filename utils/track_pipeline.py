@@ -5,6 +5,7 @@ from yolov7.detect import Detect, AsyncDetect
 import numpy as np
 from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
+import torch
 
 class TrackPipelineThread(threading.Thread):
 
@@ -30,9 +31,10 @@ class TrackPipelineThread(threading.Thread):
 
     def __init__(self, config):
         threading.Thread.__init__(self)
+        self.name = "TrackPipelineThread[{}]".format(self.name)
         self.config = config
         self.queue_size = self.config['detector']['batch_size'] * self.config['detector']['num_detect']
-        self.queue = queue.Queue(self.queue_size)
+        self.detect_queue = queue.Queue(self.queue_size)
         self.is_stop = False
         self.result = {}
         self.put_queue_threads = []
@@ -46,12 +48,13 @@ class TrackPipelineThread(threading.Thread):
     def run(self):
         global pause_queue_name
         while not self.is_stop:
-            if self.queue.full():
+            if self.detect_queue.full():
                 names = []
                 im0s = []
                 for _ in range(self.queue_size):
-                    name, img0 = self.queue.get()
+                    name, img0 = self.detect_queue.get()
                     names.append(name)
+                    # im0s.append(torch.Tensor(img0))
                     im0s.append(img0)
 
                 # t0 = time.time()
@@ -81,7 +84,7 @@ class TrackPipelineThread(threading.Thread):
 
     def add_put_queue_thread(self, load_data, name):
         self.put_queue_threads.append(
-            TrackPipelineThread.PutQueueThread(self.queue, load_data, name))
+            TrackPipelineThread.PutQueueThread(self.detect_queue, load_data, name))
         self.result[name] = queue.Queue(self.queue_size*3) # 自少要有三倍的空間，不然會卡住
         self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']), frame_rate=int(load_data.get_fps()))
         self.source_names.append(name)
