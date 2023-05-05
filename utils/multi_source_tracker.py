@@ -155,7 +155,7 @@ class MultiSourceTracker:
         '''整理輸出'''
         reslut = {}
         for name in self.source_names:
-            reslut[name] = list(map(self.target2result, reslut_target[name]))
+            reslut[name] = list(map(self.target2result, data[name][2], reslut_target[name]))
         return reslut
     
     def remove_match_list(self, source_name, track_id):
@@ -163,8 +163,16 @@ class MultiSourceTracker:
             self.source_match_list[s].remove((source_name, track_id))
         self.target_pool[source_name][track_id].find_match_list = []
 
-    def target2result(self, target):
-        if target.prev:
-            return (target.prev.origin, target.match_conf)
-        return (None, None)
+    #TODO:緩存已處理好的target
+    def target2result(self, target, mtarget):
+        *xyxy, conf, cls, track_id = target
+        res = []
+        temp_target = mtarget.prev
+        while True:
+            if temp_target != None:
+                res.append((temp_target.origin, temp_target.track_id, float(temp_target.next.match_conf)))
+            else:
+                break
+            temp_target = temp_target.prev
+        return (*xyxy, conf, cls, track_id, res)
 

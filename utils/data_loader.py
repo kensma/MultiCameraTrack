@@ -32,6 +32,10 @@ class LoadWebcam(threading.Thread):
         width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return (width, height)
+    
+    def get_fps(self):
+        ori_fps =  self._cap.get(cv2.CAP_PROP_FPS)
+        return ori_fps / (self.skip + 1)
 
     def __iter__(self):
         return self
@@ -57,6 +61,10 @@ class LoadVideo:
         width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return (width, height)
+    
+    def get_fps(self):
+        return self._cap.get(cv2.CAP_PROP_FPS)
+
 
     def __iter__(self):
         return self

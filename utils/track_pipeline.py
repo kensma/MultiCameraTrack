@@ -83,7 +83,7 @@ class TrackPipelineThread(threading.Thread):
         self.put_queue_threads.append(
             TrackPipelineThread.PutQueueThread(self.queue, load_data, name))
         self.result[name] = queue.Queue(self.queue_size*3) # 自少要有三倍的空間，不然會卡住
-        self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']))
+        self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']), frame_rate=int(load_data.get_fps()))
         self.source_names.append(name)
 
     def get_result(self, name):
