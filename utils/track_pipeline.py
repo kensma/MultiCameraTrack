@@ -6,6 +6,7 @@ import numpy as np
 from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
 import torch
+from yolov7.utils.datasets import letterbox
 
 class TrackPipelineThread(threading.Thread):
 
@@ -24,7 +25,9 @@ class TrackPipelineThread(threading.Thread):
                 if pause_queue_name == self.name:
                     continue
                 img0 = next(self.load_data)
-                self.detect_queue.put((self.name, img0))
+                img, _, _ = letterbox(img0, (512, 512), auto=False, scaleup=True)
+                img = img.transpose(2, 0, 1)
+                self.detect_queue.put((self.name, img0, img))
 
         def stop(self):
             self.is_stop = True
@@ -51,14 +54,18 @@ class TrackPipelineThread(threading.Thread):
             if self.detect_queue.full():
                 names = []
                 im0s = []
+                imgs = []
+                shapes = []
                 for _ in range(self.queue_size):
-                    name, img0 = self.detect_queue.get()
+                    name, img0, img = self.detect_queue.get()
                     names.append(name)
-                    # im0s.append(torch.Tensor(img0))
                     im0s.append(img0)
+                    imgs.append(img)
+                    shapes.append(img0.shape)
+
 
                 # t0 = time.time()
-                pred = self.detect(im0s)
+                pred = self.detect(imgs, shapes)
                 # print('detect time: ', time.time() - t0)
 
                 for i in range(len(names)):

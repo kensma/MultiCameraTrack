@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from collections import deque
+from collections import deque, defaultdict
 
 from utils.predictor import AsyncPredictor
 
@@ -24,7 +24,7 @@ class TargetNode:
         self.feature = feature
 
         self.state = TargetState.New
-        self.find_match_list = []
+        self.find_match_list = set()
 
         self.next = None
         self.prev = None
@@ -40,7 +40,7 @@ class TargetNode:
     def update_state(self, state):
         self.state = state
         if state == TargetState.Match:
-            self.find_match_list = []
+            self.find_match_list.clear()
 
     def update_feature_img(self, img, conf, feature):
         self.feature = feature
@@ -71,8 +71,7 @@ class MultiSourceTracker:
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
         self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id
-        self.source_match_list = {x:[] for x in self.source_names} # 用來存放每個source的匹配list
-
+        self.source_match_list = {x:set() for x in self.source_names} # 用來存放每個source的匹配list
 
     def update(self, data):
         self.frame_id += 1
@@ -121,8 +120,7 @@ class MultiSourceTracker:
                 self.target_pool[source_name][track_id].update_state(TargetState.Lost)
                 #TODO: 增加距離匹配邏輯
                 for s in self.source_names:
-                    self.source_match_list[s].append((source_name, track_id))
-                    self.target_pool[source_name][track_id].find_match_list.append(s)
+                    self.add_match_list(source_name, track_id, s)
 
         '''匹配target'''
         for source_name, track_id in self.target_lost_deque[0]:
@@ -161,7 +159,11 @@ class MultiSourceTracker:
     def remove_match_list(self, source_name, track_id):
         for s in self.target_pool[source_name][track_id].find_match_list:
             self.source_match_list[s].remove((source_name, track_id))
-        self.target_pool[source_name][track_id].find_match_list = []
+        self.target_pool[source_name][track_id].find_match_list.clear()
+
+    def add_match_list(self, source_name, track_id, add_source_name):
+        self.source_match_list[add_source_name].add((source_name, track_id))
+        self.target_pool[source_name][track_id].find_match_list.add(add_source_name)
 
     #TODO:緩存已處理好的target
     def target2result(self, target, mtarget):

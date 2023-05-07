@@ -93,6 +93,9 @@ class AsyncDetect:
                 idx, imgs, shapes  = self.in_queue.get()
                 res = detect(imgs, shapes)
                 self.out_queue.put((idx, res))
+                del imgs
+                del shapes
+                del idx
 
     def __init__(self, cfg):
         self.num_detect = cfg.num_detect
@@ -109,20 +112,24 @@ class AsyncDetect:
 
         #  初始化
         for i in range(self.num_detect):
-            self.__call__(np.zeros((self.batch_size*self.num_detect, self.imgsz, self.imgsz, 3)))
+            self.__call__(
+                np.zeros((self.batch_size*self.num_detect, 3, self.imgsz, self.imgsz)),
+                [(self.imgsz, self.imgsz, 3) for _ in range(self.batch_size*self.num_detect)]
+            )
 
-    def __call__(self, im0s):
+    def __call__(self, im0s, shapes):
         # print("====================================")
         # t0 = time.time()
-        imgs = []
-        shapes = []
-        for img in im0s:
-            shapes.append(img.shape)
-            img, _, _ = letterbox(img, (self.imgsz, self.imgsz), auto=False, scaleup=True)
-            img = img.transpose(2, 0, 1)
-            imgs.append(img)
+        # imgs = []
+        # shapes = []
+        # for img in im0s:
+        #     shapes.append(img.shape)
+        #     img, _, _ = letterbox(img, (self.imgsz, self.imgsz), auto=False, scaleup=True)
+        #     img = img.transpose(2, 0, 1)
+        #     imgs.append(img)
 
-        imgs = np.array(imgs)
+        # imgs = np.array(imgs)
+        imgs = np.array(im0s)
         imgs_tensor = torch.from_numpy(imgs)
         # print('preprocess time: ', time.time()-t0)
         # t0 = time.time()
@@ -134,7 +141,7 @@ class AsyncDetect:
         res = []
         for _ in range(self.num_detect):
             idx, data = self.out_queue.get()
-            res[len(data)*idx:len(data)*idx] = data
+            res[self.batch_size*idx:self.batch_size*idx] = data
         # print('get time: ', time.time()-t0)
         # print("====================================")
         return res
