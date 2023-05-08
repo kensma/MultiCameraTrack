@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+import cv2
 from collections import deque, defaultdict
 
 from utils.predictor import AsyncPredictor
@@ -13,11 +14,12 @@ class TargetState(object):
     Lost = 2
 
 class TargetNode:
-    def __init__(self, origin, cls, track_id, frame_id, xyxy, img=None, conf=None, feature=None):
+    def __init__(self, origin, cls, track_id, frame_id, target_id, xyxy, img=None, conf=None, feature=None):
         self.origin = origin
         self.cls = cls
         self.track_id = track_id
         self.frame_id = frame_id
+        self.target_id = target_id
         self.xyxy = xyxy
         self.img = img
         self.conf = conf
@@ -26,16 +28,8 @@ class TargetNode:
         self.state = TargetState.New
         self.find_match_list = set()
 
-        self.next = None
-        self.prev = None
+        self.mtarget = None
         self.match_conf = None
-
-    def match(self, target_node, match_conf):
-        self.prev = target_node
-        target_node.next = self
-        self.match_conf = match_conf
-        self.update_state(TargetState.Match)
-        target_node.update_state(TargetState.Match)
 
     def update_state(self, state):
         self.state = state
@@ -45,14 +39,26 @@ class TargetNode:
     def update_feature_img(self, img, conf, feature):
         self.feature = feature
         self.conf = conf
+        self.img = img
 
     def update(self, frame_id, xyxy):
         self.frame_id = frame_id
         self.xyxy = xyxy
-        if self.prev == None:
+        if self.mtarget == None:
             self.update_state(TargetState.New)
         else:
             self.update_state(TargetState.Match)
+
+class MTargetNode:
+    def __init__(self, mTarget_id):
+        self.mTarget_id = mTarget_id
+        self.match_dict = defaultdict(dict)
+
+    def match(self, target_node, frame_id, match_conf=None):
+        self.match_dict[target_node.origin][target_node.track_id] = frame_id
+        target_node.mtarget = self
+        target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
+        target_node.update_state(TargetState.Match)
 
 class MultiSourceTracker:
     def __init__(self, config, source_names):
@@ -66,6 +72,7 @@ class MultiSourceTracker:
         _ = self.predictor([np.zeros((200, 200, 3), dtype=np.uint8)])
 
         self.frame_id  = 0
+        self.count = 0
         self.max_target_lost = self.config['max_target_lost'] # 丟失多少幀後刪除
         self.match_thres = self.config['match_thres'] # 匹配閾值
 
@@ -103,7 +110,8 @@ class MultiSourceTracker:
                 else:
                     imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
                     img_info.append((track_id, conf))
-                    self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, xyxy)
+                    self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, self.count, xyxy)
+                    self.count += 1
                     self.target_lost_deque[0].append((source_name, track_id))
                 
                 reslut_target[source_name].append(self.target_pool[source_name][track_id])
@@ -140,10 +148,12 @@ class MultiSourceTracker:
                 if distmat[max_index] < self.match_thres:
                     s, t = feature_info[max_index]
                     self.remove_match_list(s, t)
-                    self.target_pool[source_name][track_id].match(self.target_pool[s][t], distmat[max_index])
-                    old_deque_index = self.frame_id - self.target_pool[s][t].frame_id
-                    self.target_lost_deque[old_deque_index].remove((s, t))
-                    del self.target_pool[s][t]
+                    mtarget = MTargetNode(self.target_pool[s][t].target_id)
+                    mtarget.match(self.target_pool[s][t], self.frame_id)
+                    mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[max_index])
+
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[max_index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
 
         '''刪除遺失的target'''
         for source_name, track_id in self.target_lost_deque[-1]:
@@ -151,10 +161,7 @@ class MultiSourceTracker:
             del self.target_pool[source_name][track_id]
 
         '''整理輸出'''
-        reslut = {}
-        for name in self.source_names:
-            reslut[name] = list(map(self.target2result, data[name][2], reslut_target[name]))
-        return reslut
+        return self.get_result(data)
     
     def remove_match_list(self, source_name, track_id):
         for s in self.target_pool[source_name][track_id].find_match_list:
@@ -166,15 +173,14 @@ class MultiSourceTracker:
         self.target_pool[source_name][track_id].find_match_list.add(add_source_name)
 
     #TODO:緩存已處理好的target
-    def target2result(self, target, mtarget):
-        *xyxy, conf, cls, track_id = target
-        res = []
-        temp_target = mtarget.prev
-        while True:
-            if temp_target != None:
-                res.append((temp_target.origin, temp_target.track_id, float(temp_target.next.match_conf)))
-            else:
-                break
-            temp_target = temp_target.prev
-        return (*xyxy, conf, cls, track_id, res)
+    def get_result(self, data):
+        res = defaultdict(list)
+        for source_name, (img, pred, targets) in data.items():
+            for *xyxy, conf, cls, track_id in targets:
+                target = self.target_pool[source_name][track_id]
+                mtarget = target.mtarget
+                res_id = mtarget.mTarget_id if mtarget != None else target.target_id
+                res[source_name].append((*xyxy, conf, cls, track_id, res_id))
+        return res
+
 

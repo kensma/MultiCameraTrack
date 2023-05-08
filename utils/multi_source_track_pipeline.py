@@ -101,8 +101,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                     self.pred_csv_writer.writerow(line)
 
                 for target in targets:
-                    prev = json.dumps(target[-1])
-                    line = [self.frame_id, *target[:-1], prev]
+                    line = [self.frame_id, *target]
                     self.target_csv_writer.writerow(line)
 
                 self.video_writer.write(img)
