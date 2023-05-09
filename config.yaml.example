@@ -40,7 +40,8 @@ reid: Base-bagtricks.yml
 MultiSourceTracker:
   predictor_config: Base-bagtricks.yml
   max_target_lost: 300
-  match_thres: 0.09
+  min_match_lost: 30
+  match_thres: 0.08
   save_result: True
   save_root_path: data
-
+  areas: [ [ 'cam1', 'cam2' ] ]

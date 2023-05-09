@@ -67,7 +67,7 @@ class MTargetNode:
         target_node.update_state(TargetState.Match)
 
 class MultiSourceTracker:
-    def __init__(self, config, source_names, areas=[]):
+    def __init__(self, config, source_names):
         self.source_names = source_names
         self.config = config
 
@@ -82,14 +82,14 @@ class MultiSourceTracker:
         self.max_target_lost = self.config['max_target_lost'] # 丟失多少幀後刪除
         self.match_thres = self.config['match_thres'] # 匹配閾值
         self.min_match_lost = self.config['min_match_lost'] # 最少lost多少幀後才匹配
+        self.areas = self.config['areas'] # 重疊區域
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
         self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id
         self.source_match_list = {x:set() for x in self.source_names} # 用來存放每個source的匹配list
 
-        areas = [('cam1', 'cam2')] # TODO: Test
         self.area_match = defaultdict(set)
-        for area in areas:
+        for area in self.areas:
             area_sort = sorted(area)
             for i, n in enumerate(area_sort):
                 for n2 in area_sort[i+1:]:
@@ -180,7 +180,7 @@ class MultiSourceTracker:
                     break
 
                 # lost匹配
-                if len(lost_features) > index:
+                if len(lost_info) > index:
                     if lost_match: # 限制重複匹配
                         continue
                     lost_match = True
@@ -191,11 +191,11 @@ class MultiSourceTracker:
                     self.target_pool[s][t].update_state(TargetState.Match)
                     mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
 
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
+                    cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img)
+                    cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-lost.jpg', self.target_pool[source_name][track_id].img)
                 # 重疊區域匹配
                 else:
-                    s, t = area_info[index-len(lost_features)]
+                    s, t = area_info[index-len(lost_info)]
                     self.target_pool[source_name][track_id].area_match.add(s)
 
                     q_target = self.target_pool[source_name][track_id]
@@ -206,8 +206,8 @@ class MultiSourceTracker:
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, self.frame_id, distmat[index])
 
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
+                    cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img)
+                    cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-area.jpg', self.target_pool[source_name][track_id].img)
 
         '''刪除遺失的target'''
         for source_name, track_id in self.target_lost_deque[-1]:
