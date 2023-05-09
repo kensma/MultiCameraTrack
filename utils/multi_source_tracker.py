@@ -45,10 +45,10 @@ class TargetNode:
     def update(self, frame_id, xyxy):
         self.frame_id = frame_id
         self.xyxy = xyxy
-        if self.mtarget == None:
-            self.update_state(TargetState.New)
-        else:
+        if self.mtarget.is_match:
             self.update_state(TargetState.Match)
+        else:
+            self.update_state(TargetState.New)
 
 class MTargetNode:
     def __init__(self, mTarget_id, target):
@@ -57,8 +57,10 @@ class MTargetNode:
 
         self.match_dict[target.origin][target.track_id] = target.frame_id
         self.min_frame_id = target.frame_id
+        self.is_match = False
 
     def match(self, target_node, frame_id, match_conf=None):
+        self.is_match = True
         self.match_dict[target_node.origin][target_node.track_id] = frame_id
         target_node.mtarget = self
         target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
@@ -155,9 +157,22 @@ class MultiSourceTracker:
             lost_features, lost_info = self.get_lost_feature(source_name, track_id) # lost匹配
             area_features, area_info = self.get_area_feature(source_name, track_id) # 重疊區域匹配
 
+            if not len(lost_features) and not len(area_features):
+                continue
+
             features = torch.stack([query_feature, *lost_features, *area_features])
             distmat = 1 - torch.mm(features[:1], features[1:].t())
             distmat = distmat.numpy()[0]
+
+            # log = f"query: {source_name}-{track_id} \n"
+            # log += f"lost: {lost_info} \n"
+            # log += f"area: {area_info} \n"
+            # log += f'cam1 ids: {self.target_pool["cam1"].keys()} \n'
+            # log += f'cam2 ids: {self.target_pool["cam2"].keys()} \n'
+            # log += f"distmat: {distmat} \n\n"
+            # with open('log.txt', 'a') as f:
+            #     f.write(log)
+
             sort_index = np.argsort(distmat)
             lost_match = False
             for i, index in enumerate(sort_index):
@@ -180,7 +195,7 @@ class MultiSourceTracker:
                     # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
                 # 重疊區域匹配
                 else:
-                    s, t = area_info[index]
+                    s, t = area_info[index-len(lost_features)]
                     self.target_pool[source_name][track_id].area_match.add(s)
 
                     q_target = self.target_pool[source_name][track_id]
@@ -219,7 +234,7 @@ class MultiSourceTracker:
         for s in self.area_match[source_name]:
             if s not in target.area_match: # 限制在同一個相機只能匹配一次
                 for t_id, t in self.target_pool[s].items():
-                    if t.state == TargetState.New:
+                    if t.state != TargetState.Lost:
                         features.append(t.feature)
                         feature_info.append((s, t_id))
         return features, feature_info
