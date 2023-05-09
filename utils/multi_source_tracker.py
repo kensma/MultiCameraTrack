@@ -14,12 +14,11 @@ class TargetState(object):
     Lost = 2
 
 class TargetNode:
-    def __init__(self, origin, cls, track_id, frame_id, target_id, xyxy, img=None, conf=None, feature=None):
+    def __init__(self, origin, cls, track_id, frame_id, mtarget_id, xyxy, img=None, conf=None, feature=None):
         self.origin = origin
         self.cls = cls
         self.track_id = track_id
         self.frame_id = frame_id
-        self.target_id = target_id
         self.xyxy = xyxy
         self.img = img
         self.conf = conf
@@ -28,7 +27,7 @@ class TargetNode:
         self.state = TargetState.New
         self.find_match_list = set()
 
-        self.mtarget = None
+        self.mtarget = MTargetNode(mtarget_id, self)
         self.match_conf = None
 
         self.area_match = set()
@@ -52,12 +51,14 @@ class TargetNode:
             self.update_state(TargetState.Match)
 
 class MTargetNode:
-    def __init__(self, mTarget_id):
+    def __init__(self, mTarget_id, target):
         self.mTarget_id = mTarget_id
         self.match_dict = defaultdict(dict)
 
+        self.match_dict[target.origin][target.track_id] = target.frame_id
+        self.min_frame_id = target.frame_id
+
     def match(self, target_node, frame_id, match_conf=None):
-        # TODO: 這邊要包含時間
         self.match_dict[target_node.origin][target_node.track_id] = frame_id
         target_node.mtarget = self
         target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
@@ -171,8 +172,8 @@ class MultiSourceTracker:
                     s, t = lost_info[index]
                     self.remove_match_list(s, t)
 
-                    mtarget = MTargetNode(self.target_pool[s][t].target_id)
-                    mtarget.match(self.target_pool[s][t], self.frame_id)
+                    mtarget = self.target_pool[s][t].mtarget
+                    self.target_pool[s][t].update_state(TargetState.Match)
                     mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
 
                     # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
@@ -182,12 +183,16 @@ class MultiSourceTracker:
                     s, t = area_info[index]
                     self.target_pool[source_name][track_id].area_match.add(s)
 
-                    mtarget = MTargetNode(self.target_pool[s][t].target_id)
-                    mtarget.match(self.target_pool[s][t], self.frame_id)
-                    mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
+                    q_target = self.target_pool[source_name][track_id]
+                    m_target = self.target_pool[s][t]
+                    t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
+                    mtarget = t1.mtarget
 
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
+                    t1.update_state(TargetState.Match)
+                    mtarget.match(t2, self.frame_id, distmat[index])
+
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}.jpg', self.target_pool[s][t].img)
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}.jpg', self.target_pool[source_name][track_id].img)
 
         '''刪除遺失的target'''
         for source_name, track_id in self.target_lost_deque[-1]:
@@ -201,7 +206,6 @@ class MultiSourceTracker:
         features = []
         feature_info = [] # 用來存放比較的target
         if self.target_pool[source_name][track_id].state == TargetState.New:
-            # features = [self.target_pool[source_name][track_id].feature]
             for s, t in self.source_match_list[source_name]:
                 features.append(self.target_pool[s][t].feature)
                 feature_info.append((s, t))
@@ -236,7 +240,7 @@ class MultiSourceTracker:
             for *xyxy, conf, cls, track_id in targets:
                 target = self.target_pool[source_name][track_id]
                 mtarget = target.mtarget
-                res_id = mtarget.mTarget_id if mtarget != None else target.target_id
+                res_id = mtarget.mTarget_id
                 res[source_name].append((*xyxy, conf, cls, track_id, res_id))
         return res
 
