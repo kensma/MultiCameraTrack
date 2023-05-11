@@ -41,7 +41,6 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
     def run(self):
         while not self.shutdown:
             res = {}
-            #TODO: 增加無訊號的處理
             single_result = {}
             for name in self.source_names:
                 single_result[name] = self.track_pipeline.get_result(name)
