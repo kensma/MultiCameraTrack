@@ -78,6 +78,9 @@ class Detect:
 
 class AsyncDetect:
 
+    class _StopToken:
+        pass
+
     class _DetectWorker(mp.Process):
         def __init__(self, in_queue, out_queue, cfg):
             mp.Process.__init__(self)
@@ -91,6 +94,8 @@ class AsyncDetect:
 
             while True:
                 idx, imgs, shapes  = self.in_queue.get()
+                if isinstance(imgs, AsyncDetect._StopToken):
+                    break
                 res = detect(imgs, shapes)
                 self.out_queue.put((idx, res))
                 del imgs
@@ -145,3 +150,11 @@ class AsyncDetect:
         # print('get time: ', time.time()-t0)
         # print("====================================")
         return res
+    
+    def stop(self):
+        for _ in self.detects:
+            self.in_queue.put((self._StopToken, None, None))
+        
+        for detect in self.detects:
+            while detect.is_alive():
+                self.out_queue.get()

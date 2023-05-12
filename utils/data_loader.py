@@ -120,6 +120,9 @@ class LoadVideo:
             return img0
         else:
             return np.zeros((*self.get_shape()[::-1], 3), dtype=np.uint8)
+        
+    def stop(self):
+        pass
 
     # def __len__(self):
     #     return self.length

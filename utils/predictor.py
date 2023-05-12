@@ -74,7 +74,7 @@ class AsyncPredictor:
         for p in self.procs:
             p.start()
 
-        atexit.register(self.shutdown)
+        atexit.register(self.stop)
 
     def put(self, image):
         self.put_idx += 1
@@ -108,9 +108,13 @@ class AsyncPredictor:
         self.put(torch.cat(imgs, dim=0))
         return self.get()
 
-    def shutdown(self):
+    def stop(self):
         for _ in self.procs:
             self.task_queue.put(AsyncPredictor._StopToken())
+
+        for proc in self.procs:
+            while proc.is_alive():
+                self.result_queue.get()
 
     @property
     def default_buffer_size(self):

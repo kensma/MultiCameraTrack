@@ -35,11 +35,11 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
         self.track_pipeline.start()
 
-        self.shutdown = False
+        self.is_run = True
 
         self.multi_source_tracker = MultiSourceTracker(config['MultiSourceTracker'], self.source_names)
     def run(self):
-        while not self.shutdown:
+        while self.is_run:
             res = {}
             single_result = {}
             for name in self.source_names:
@@ -58,7 +58,12 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             self.process_result(res)
 
     def stop(self):
-        self.shutdown = True
+        self.track_pipeline.stop()
+        for load_data in self.load_data_threads.values():
+            load_data.stop()
+        self.multi_source_tracker.stop()
+        self.is_run = False
+        print("MultiSourceTrackPipeline stop")
 
     def process_result(self, res):
         raise NotImplementedError

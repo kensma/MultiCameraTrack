@@ -258,5 +258,8 @@ class MultiSourceTracker:
                 res_id = mtarget.mTarget_id
                 res[source_name].append((*xyxy, conf, cls, track_id, res_id))
         return res
+    
+    def stop(self):
+        self.predictor.stop()
 
 
