@@ -8,10 +8,14 @@ import json
 import atexit
 import csv
 import os
+import random
+import cv2
 
-from utils.data_loader import LoadVideo, LoadWebcam
+from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
 from utils.track_pipeline import TrackPipelineThread
 from utils.multi_source_tracker import MultiSourceTracker
+from utils.file_utls import CSVFile
+from yolov7.utils.plots import plot_one_box
 
 
 class BaseMultiSourceTrackPipeline(threading.Thread):
@@ -28,10 +32,14 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 self.load_data_threads[name] = LoadWebcam(**source)
             elif config['sourceType'] == 'video':
                 self.load_data_threads[name] = LoadVideo(**source)
+            elif config['sourceType'] == 'image':
+                self.load_data_threads[name] = LoadImage(**source)
 
             self.track_pipeline.add_put_queue_thread(self.load_data_threads[name], name)
             
         self.source_names = self.load_data_threads.keys()
+        self.frame_id = 0
+        self.max_frame_id = config['MultiSourceTracker']['max_frame']
 
         self.track_pipeline.start()
 
@@ -40,6 +48,11 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.multi_source_tracker = MultiSourceTracker(config['MultiSourceTracker'], self.source_names)
     def run(self):
         while self.is_run:
+            self.frame_id += 1
+            if self.max_frame_id != -1 and self.frame_id > self.max_frame_id:
+                self.stop()
+                break
+            
             res = {}
             single_result = {}
             for name in self.source_names:
@@ -58,9 +71,9 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             self.process_result(res)
 
     def stop(self):
-        self.track_pipeline.stop()
         for load_data in self.load_data_threads.values():
             load_data.stop()
+        self.track_pipeline.stop()
         self.multi_source_tracker.stop()
         self.is_run = False
         print("MultiSourceTrackPipeline stop")
@@ -74,12 +87,14 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
     class FileWriter(threading.Thread):
-        def __init__(self, name, load_data):
+        def __init__(self, name, load_data, plot_result=False, line_thickness=1):
             threading.Thread.__init__(self)
             self.name = "FileWriter[{}]".format(name)
             self.is_run = True
+            self.plot_result = plot_result
             self.video_writer = None
             self.frame_id = 0
+            self.line_thickness = line_thickness
 
             self.queue = queue.Queue(128)
             self.save_path = None
@@ -99,17 +114,23 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
         def run(self):
             while self.is_run:
                 img, preds, targets = self.queue.get()
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
                 for pred in preds:
                     line = [self.frame_id, *pred]
-                    self.pred_csv_writer.writerow(line)
+                    self.pred_file.write(line)
 
                 for target in targets:
                     line = [self.frame_id, *target]
-                    self.target_csv_writer.writerow(line)
+                    self.target_file.write(line)
 
+                if self.plot_result:
+                    for *xyxy, conf, cls, track_id, match_id in targets:
+                        label = f'{names[int(cls)]}  {int(track_id)}  {conf:.2f} #{match_id}'
+                        plot_one_box(xyxy, img, label=label, color=colors[int(cls)], line_thickness=self.line_thickness)
+        
                 self.video_writer.write(img)
-            self.video_writer.close()
+            self.close_file()
 
         def update(self, data, save_path):
             self.frame_id += 1
@@ -125,34 +146,40 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             video_path = os.path.join(self.save_path, video_file_name)
             self.video_writer = WriteGear(video_path, compression_mode = True, **self.video_params)
 
-            pred_file_name = f'{self.name}_pred.csv'
-            pred_path = os.path.join(self.save_path, pred_file_name)
-            self.pred_writer = open(pred_path, 'a')
-            self.pred_csv_writer = csv.writer(self.pred_writer)
+            self.pred_file = CSVFile(self.save_path, f'{self.name}_pred.csv')
 
-            target_file_name = f'{self.name}_target.csv'
-            target_path = os.path.join(self.save_path, target_file_name)
-            self.target_writer = open(target_path, 'a')
-            self.target_csv_writer = csv.writer(self.target_writer)
+            self.target_file = CSVFile(self.save_path, f'{self.name}_target.csv')
 
         def close_file(self):
             if self.video_writer != None:
                 self.frame_id = 0
                 self.video_writer.close()
-                self.pred_writer.close()
-                self.target_writer.close()
+                self.pred_file.close()
+                self.target_file.close()
+        
+        def stop(self):
+            self.is_run = False
 
     def __init__(self, config):
-        BaseMultiSourceTrackPipeline.__init__(self, config)
+        super().__init__(config)
 
         self.return_queues = {x: queue.Queue(64) for x in self.load_data_threads.keys()}
 
         self.save_result = config['MultiSourceTracker']['save_result']
         if self.save_result:
             self.save_root_path = config['MultiSourceTracker']['save_root_path']
+            self.plot_result = config['MultiSourceTracker']['plot_result']
+            self.plot_line_thickness = config['MultiSourceTracker']['plot_line_thickness']
+
+
+            random.seed(10)
+            global names, colors
+            names = config['detector']['names']
+            colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
+
             self.writers = {}
             for key, value in self.load_data_threads.items():
-                self.writers[key] = self.FileWriter(key, value)
+                self.writers[key] = self.FileWriter(key, value, self.plot_result, self.plot_line_thickness)
                 self.writers[key].start()
 
     def get_datetime(self):
@@ -175,3 +202,9 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
     def get_result(self, name):
         return self.return_queues[name].get()
+    
+    def stop(self):
+        if self.save_result:
+            for writer in self.writers.values():
+                writer.stop()
+        super().stop()

@@ -20,10 +20,12 @@ class TrackPipelineThread(threading.Thread):
             self.start()
 
         def run(self):
-            while is_run:
+            while True:
                 if pause_queue_name == self.name:
                     continue
                 img0 = next(self.load_data)
+                if img0 is None:
+                    break
                 img, _, _ = letterbox(img0, (512, 512), auto=False, scaleup=True)
                 img = img.transpose(2, 0, 1)
                 self.detect_queue.put((self.name, img0, img))
@@ -40,15 +42,14 @@ class TrackPipelineThread(threading.Thread):
         self.detect = AsyncDetect(AttrDict(self.config['detector']))
         self.trackers = {}
 
-        global is_run
-        is_run = True
+        self.is_run = True
 
         global pause_queue_name
         pause_queue_name = None
 
     def run(self):
         global pause_queue_name
-        while is_run:
+        while self.is_run:
             if self.detect_queue.full():
                 names = []
                 im0s = []
@@ -98,7 +99,6 @@ class TrackPipelineThread(threading.Thread):
         return self.result[name].get()
 
     def stop(self):
-        global is_run
-        is_run = False
+        self.is_run = False
         self.detect.stop()
         print("TrackPipelineThread stop")
