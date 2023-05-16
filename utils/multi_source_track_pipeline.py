@@ -103,9 +103,9 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.video_params = {
                     "-input_framerate": load_data.get_fps(),
                     "-output_dimensions": load_data.get_shape(),
-                    "-b:v": "500k",
-                    "-maxrate": "1000k",
-                    "-bufsize": "1000k"
+                    # "-b:v": "1000k",
+                    # "-maxrate": "2000k",
+                    # "-bufsize": "2000k"
             }
 
             atexit.register(self.create_file)

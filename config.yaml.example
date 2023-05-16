@@ -19,6 +19,7 @@ detector:
   iou_thres: 0.45
   classes: [ 0 ]
   agnostic_nms: True
+  detect_queue_size: 9
   num_detect: 1
   names: [ 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
          'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
@@ -43,5 +44,8 @@ MultiSourceTracker:
   min_match_lost: 30
   match_thres: 0.08
   save_result: True
-  save_root_path: data
+  plot_result: True
+  plot_line_thickness: 3
+  max_frame: -1
+  save_root_path: run
   areas: [ [ 'cam1', 'cam2' ] ]

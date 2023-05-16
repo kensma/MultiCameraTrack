@@ -20,9 +20,17 @@ class TargetNode:
         self.track_id = track_id
         self.frame_id = frame_id
         self.xyxy = xyxy
-        self.img = img
-        self.conf = conf
-        self.feature = feature
+
+        # self.img = img
+        # self.conf = conf
+        # self.feature = feature
+
+        self.img = deque([], maxlen=5)
+        self.conf = deque([], maxlen=5)
+        self.feature = deque([], maxlen=5)
+        self.mean_feature = None
+        if feature != None:
+            self.update_feature_img(img, conf, feature)
 
         self.state = TargetState.New
         self.find_match_list = set()
@@ -30,21 +38,26 @@ class TargetNode:
         self.mtarget = MTargetNode(mtarget_id, self)
         self.match_conf = None
 
-        self.area_match = set()
-
     def update_state(self, state):
         self.state = state
         if state == TargetState.Match:
             self.find_match_list.clear()
+        elif state == TargetState.Lost:
+            self.mtarget.match_dict[self.origin] = None
 
     def update_feature_img(self, img, conf, feature):
-        self.feature = feature
-        self.conf = conf
-        self.img = img
+        # self.feature = feature
+        # self.conf = conf
+        # self.img = img
+        self.feature.append(feature)
+        self.conf.append(conf)
+        self.img.append(img)
+        self.mean_feature = torch.mean(torch.stack(list(self.feature)), dim=0)
 
     def update(self, frame_id, xyxy):
         self.frame_id = frame_id
         self.xyxy = xyxy
+        self.mtarget.match_dict[self.origin] = self.track_id
         if self.mtarget.is_match:
             self.update_state(TargetState.Match)
         else:
@@ -55,13 +68,13 @@ class MTargetNode:
         self.mTarget_id = mTarget_id
         self.match_dict = defaultdict(dict)
 
-        self.match_dict[target.origin][target.track_id] = target.frame_id
+        self.match_dict[target.origin] = target.track_id
         self.min_frame_id = target.frame_id
         self.is_match = False
 
     def match(self, target_node, frame_id, match_conf=None):
         self.is_match = True
-        self.match_dict[target_node.origin][target_node.track_id] = frame_id
+        self.match_dict[target_node.origin] = target_node.track_id
         target_node.mtarget = self
         target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
         target_node.update_state(TargetState.Match)
@@ -118,7 +131,8 @@ class MultiSourceTracker:
                     self.remove_match_list(source_name, track_id)
 
                     # conf比較高, 更新future
-                    if self.target_pool[source_name][track_id].conf < conf:
+                    # if self.target_pool[source_name][track_id].conf < conf:
+                    if len(self.target_pool[source_name][track_id].conf) < 5:
                         imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
                         img_info.append((track_id, conf))
                 # 新target
@@ -145,14 +159,17 @@ class MultiSourceTracker:
         '''更新匹配list'''
         for source_name, track_id in self.target_lost_deque[self.min_match_lost]:
             if self.target_pool[source_name][track_id].state == TargetState.Lost:
+                # TODO 加入距離匹配
                 for s in self.source_names:
-                    self.add_match_list(source_name, track_id, s)
+                    if self.target_pool[source_name][track_id].mtarget.match_dict[s] == None:
+                        self.add_match_list(source_name, track_id, s)
 
         '''匹配target'''
         for source_name, track_id in self.target_lost_deque[0]:
             if not len(self.source_match_list[source_name]) and not len(self.area_match[source_name]):
                 continue
-            query_feature = self.target_pool[source_name][track_id].feature
+            # query_feature = self.target_pool[source_name][track_id].feature
+            query_feature = self.target_pool[source_name][track_id].mean_feature
             
             lost_features, lost_info = self.get_lost_feature(source_name, track_id) # lost匹配
             area_features, area_info = self.get_area_feature(source_name, track_id) # 重疊區域匹配
@@ -191,12 +208,11 @@ class MultiSourceTracker:
                     self.target_pool[s][t].update_state(TargetState.Match)
                     mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
 
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img)
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-lost.jpg', self.target_pool[source_name][track_id].img)
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img[-1])
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-lost.jpg', self.target_pool[source_name][track_id].img[-1])
                 # 重疊區域匹配
                 else:
                     s, t = area_info[index-len(lost_info)]
-                    self.target_pool[source_name][track_id].area_match.add(s)
 
                     q_target = self.target_pool[source_name][track_id]
                     m_target = self.target_pool[s][t]
@@ -206,8 +222,8 @@ class MultiSourceTracker:
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, self.frame_id, distmat[index])
 
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img)
-                    cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-area.jpg', self.target_pool[source_name][track_id].img)
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img[-1])
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-area.jpg', self.target_pool[source_name][track_id].img[-1])
 
         '''刪除遺失的target'''
         for source_name, track_id in self.target_lost_deque[-1]:
@@ -222,7 +238,8 @@ class MultiSourceTracker:
         feature_info = [] # 用來存放比較的target
         if self.target_pool[source_name][track_id].state == TargetState.New:
             for s, t in self.source_match_list[source_name]:
-                features.append(self.target_pool[s][t].feature)
+                # features.append(self.target_pool[s][t].feature)
+                features.append(self.target_pool[s][t].mean_feature)
                 feature_info.append((s, t))
         return features, feature_info
     
@@ -232,10 +249,11 @@ class MultiSourceTracker:
 
         target = self.target_pool[source_name][track_id]
         for s in self.area_match[source_name]:
-            if s not in target.area_match: # 限制在同一個相機只能匹配一次
+            if target.mtarget.match_dict[s] == None: # 限制在同一個相機只能匹配一次
                 for t_id, t in self.target_pool[s].items():
                     if t.state != TargetState.Lost:
-                        features.append(t.feature)
+                        # features.append(t.feature)
+                        features.append(t.mean_feature)
                         feature_info.append((s, t_id))
         return features, feature_info
     
