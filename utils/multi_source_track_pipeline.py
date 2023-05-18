@@ -113,6 +113,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
         def run(self):
             while self.is_run:
+                self.frame_id += 1
                 img, preds, targets = self.queue.get()
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
@@ -133,7 +134,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.close_file()
 
         def update(self, data, save_path):
-            self.frame_id += 1
+            # self.frame_id += 1
             if self.save_path != save_path:
                 self.save_path = save_path
                 self.create_file()
