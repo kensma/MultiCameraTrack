@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import random
 import torch.multiprocessing as mp
+from multiprocessing import shared_memory
 # import multiprocessing as mp
 # import threading
 # import queue
@@ -55,8 +56,17 @@ class Detect:
         self.model(torch.zeros(self._batch_size, 3, self._imgsz, self._imgsz).to(self.device).type_as(next(self.model.parameters())))
 
     @torch.no_grad()
-    def __call__(self, im0s, shape):
-        imgs_tensor = im0s.to(self.device)
+    def __call__(self, im0s):
+        imgs = []
+        shape = im0s.shape[1:]
+        for img in im0s:
+            img, _, _ = letterbox(img, (self._imgsz, self._imgsz), auto=False, scaleup=True)
+            img = img.transpose(2, 0, 1)
+            imgs.append(img)
+
+        imgs = np.array(imgs)
+
+        imgs_tensor = torch.from_numpy(imgs).to(self.device)
 
         imgs_tensor = imgs_tensor.half() if self._half else imgs_tensor.float()
         imgs_tensor /= 255.0
@@ -91,14 +101,16 @@ class AsyncDetect:
 
         def run(self):
             detect = Detect(self.cfg)
-
+            self.out_queue.put("OK")
             while True:
-                idx, imgs, shape  = self.in_queue.get()
-                if isinstance(imgs, AsyncDetect._StopToken):
+                idx, shm_name, batch_shape, start, end = self.in_queue.get()
+                if isinstance(idx, AsyncDetect._StopToken):
                     break
-                res = detect(imgs, shape)
+                shm = shared_memory.SharedMemory(name=shm_name)
+                im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
+                res = detect(im0s[start:end])
                 self.out_queue.put((idx, res))
-                del imgs
+                shm.close()
 
     def __init__(self, cfg):
         self.num_detect = cfg.num_detect
@@ -113,18 +125,15 @@ class AsyncDetect:
             self.detects.append(self._DetectWorker(self.in_queue, self.out_queue, cfg))
             self.detects[-1].start()
 
-        #  初始化
-        for i in range(self.num_detect):
-            self.__call__(
-                np.zeros((self.batch_size*self.num_detect, 3, self.imgsz, self.imgsz)),
-                (self.imgsz, self.imgsz, 3)
-            )
+        # #  初始化
+        for _ in range(self.num_detect):
+            _ = self.out_queue.get()
 
-    def __call__(self, im0s, shape):
-        imgs = np.array(im0s)
-        imgs_tensor = torch.from_numpy(imgs)
+    def __call__(self, shm_name, batch_shape):
         for i in range(self.num_detect):
-            self.in_queue.put((i, imgs_tensor[self.batch_size*i:self.batch_size*(i+1)], shape))
+            start = self.batch_size*i
+            end = self.batch_size*(i+1)
+            self.in_queue.put((i, shm_name, batch_shape, start, end))
 
         res = []
         for _ in range(self.num_detect):
@@ -134,7 +143,7 @@ class AsyncDetect:
     
     def stop(self):
         for _ in self.detects:
-            self.in_queue.put((self._StopToken, None, None))
+            self.in_queue.put((self._StopToken, None, None, None, None))
         
         for detect in self.detects:
             while detect.is_alive():

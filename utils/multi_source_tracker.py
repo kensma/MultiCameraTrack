@@ -18,6 +18,7 @@ class TargetNode:
         self.origin = origin
         self.cls = cls
         self.track_id = track_id
+        self.fast_frame_id = frame_id
         self.frame_id = frame_id
         self.xyxy = xyxy
 
@@ -41,14 +42,18 @@ class TargetNode:
         elif state == TargetState.Lost:
             self.mtarget.match_dict[self.origin] = -1
 
-    def update_feature_img(self, img, conf, feature):
-        # self.feature = feature
-        # self.conf = conf
-        # self.img = img
-        self.feature.append(feature)
-        self.conf.append(conf)
-        self.img.append(img)
+    def update_feature_img(self, img, conf, feature, replace=None):
+        if replace == None:
+            self.feature.append(feature)
+            self.conf.append(conf)
+            self.img.append(img)
+        else:
+            self.feature[replace] = feature
+            self.conf[replace] = conf
+            self.img[replace] = img
+        
         self.mean_feature = torch.mean(torch.stack(list(self.feature)), dim=0)
+
 
     def update(self, frame_id, xyxy):
         self.frame_id = frame_id
@@ -130,15 +135,19 @@ class MultiSourceTracker:
                     self.target_pool[source_name][track_id].update(self.frame_id, xyxy)
                     self.remove_match_list(source_name, track_id)
 
-                    # conf比較高, 更新future
-                    # if self.target_pool[source_name][track_id].conf < conf:
                     if len(self.target_pool[source_name][track_id].conf) < 5:
                         imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
-                        img_info.append((track_id, conf))
+                        img_info.append((track_id, conf, None))
+                    # conf比較高, 更新future
+                    elif min(self.target_pool[source_name][track_id].conf) < conf:
+                        i = np.argmin(self.target_pool[source_name][track_id].conf)
+                        imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
+                        img_info.append((track_id, conf, i))
+                        pass
                 # 新target
                 else:
                     imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
-                    img_info.append((track_id, conf))
+                    img_info.append((track_id, conf, None))
                     self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, self.count, xyxy)
                     self.count += 1
                     self.target_lost_deque[0].append((source_name, track_id))
@@ -148,13 +157,14 @@ class MultiSourceTracker:
             if len(imgs):
                 features = F.normalize(self.predictor(imgs))
 
-                for i, (img_id, conf) in enumerate(img_info):
-                    self.target_pool[source_name][img_id].update_feature_img(imgs[i], conf, features[i])
+                for i, (img_id, conf, replace) in enumerate(img_info):
+                    self.target_pool[source_name][img_id].update_feature_img(imgs[i], conf, features[i], replace)
 
         '''更新Lost target state'''
         for source_name, track_id in self.target_lost_deque[1]:
-            if self.target_pool[source_name][track_id].state == TargetState.New:
-                self.target_pool[source_name][track_id].update_state(TargetState.Lost)
+            self.target_pool[source_name][track_id].update_state(TargetState.Lost)
+            # if self.target_pool[source_name][track_id].state == TargetState.New:
+            #     self.target_pool[source_name][track_id].update_state(TargetState.Lost)
 
         '''更新匹配list'''
         for source_name, track_id in self.target_lost_deque[self.min_match_lost]:
@@ -179,7 +189,7 @@ class MultiSourceTracker:
             area_features, area_info = self.get_area_feature(source_name, track_id) # 重疊區域匹配
             # area_features, area_info = [], []
 
-            if not len(lost_features) and not len(area_features):
+            if not len(lost_info) and not len(area_info):
                 continue
 
             lost_info_list.append(lost_info)
@@ -192,118 +202,57 @@ class MultiSourceTracker:
             distmats.append(distmat)
             max_len = max(max_len, distmat.shape[0])
         
-        distmat_matrix = np.full((len(distmats), max_len), self.match_thres + 1)
-        for i, distmat in enumerate(distmats):
-            distmat_matrix[i, :distmat.shape[0]] = distmat
+        if len(distmats):
+            distmat_matrix = np.full((len(distmats), max_len), self.match_thres + 1)
+            for i, distmat in enumerate(distmats):
+                distmat_matrix[i, :distmat.shape[0]] = distmat
 
-        temp_match = defaultdict(set)
-        for _ in range(len(distmats)):
-            index = np.unravel_index((np.argmin(distmat_matrix)), distmat_matrix.shape)
-            if distmat_matrix[index] <= self.match_thres:
-                break
+            temp_match = defaultdict(set)
+            cost = 0
+            while len(distmats) > cost:
+                index = np.unravel_index((np.argmin(distmat_matrix)), distmat_matrix.shape)
+                if distmat_matrix[index] > self.match_thres:
+                    break
 
-            r, i = index
-            lost_info = lost_info_list[r]
-            area_info = area_info_list[r]
-            q_source_name, q_track_id = query_list[r]
-            # lost匹配
-            if len(lost_info) > i:
-                s, t = lost_info[i]
-                if t in temp_match[s]:
-                    distmat_matrix[index] = self.match_thres + 1
-                    continue
+                r, i = index
+                lost_info = lost_info_list[r]
+                area_info = area_info_list[r]
+                q_source_name, q_track_id = query_list[r]
+                # lost匹配
+                if len(lost_info) > i:
+                    s, t = lost_info[i]
+                    if t in temp_match[s]:
+                        distmat_matrix[index] = self.match_thres + 1
+                        continue
 
-                self.remove_match_list(s, t)
-                mtarget = self.target_pool[s][t].mtarget
-                self.target_pool[s][t].update_state(TargetState.Match)
-                mtarget.match(self.target_pool[q_source_name][q_track_id], self.frame_id, distmat_matrix[index])
+                    self.remove_match_list(s, t)
+                    mtarget = self.target_pool[s][t].mtarget
+                    self.target_pool[s][t].update_state(TargetState.Match)
+                    mtarget.match(self.target_pool[q_source_name][q_track_id], self.frame_id, distmat_matrix[index])
 
-                # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img[-1])
-                # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-lost.jpg', self.target_pool[source_name][track_id].img[-1])
-            # 重疊區域匹配
-            else:
-                s, t = area_info[i-len(lost_info)]
-                if t in temp_match[s]:
-                    distmat_matrix[index] = self.match_thres + 1
-                    continue
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img[-1])
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-lost.jpg', self.target_pool[source_name][track_id].img[-1])
+                # 重疊區域匹配
+                else:
+                    s, t = area_info[i-len(lost_info)]
+                    if t in temp_match[s]:
+                        distmat_matrix[index] = self.match_thres + 1
+                        continue
 
-                q_target = self.target_pool[q_source_name][q_track_id]
-                m_target = self.target_pool[s][t]
-                t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
-                mtarget = t1.mtarget
+                    q_target = self.target_pool[q_source_name][q_track_id]
+                    m_target = self.target_pool[s][t]
+                    t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
+                    mtarget = t1.mtarget
 
-                t1.update_state(TargetState.Match)
-                mtarget.match(t2, self.frame_id, distmat_matrix[index])
+                    t1.update_state(TargetState.Match)
+                    mtarget.match(t2, self.frame_id, distmat_matrix[index])
 
-                # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img[-1])
-                # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-area.jpg', self.target_pool[source_name][track_id].img[-1])
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img[-1])
+                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-area.jpg', self.target_pool[source_name][track_id].img[-1])
 
-            temp_match[s].add(t)
-            distmat_matrix[r, :] = self.match_thres + 1
-
-
-
-
-
-        # for source_name, track_id in self.target_lost_deque[0]:
-        #     if not len(self.source_match_list[source_name]) and not len(self.area_match[source_name]):
-        #         continue
-        #     # query_feature = self.target_pool[source_name][track_id].feature
-        #     query_feature = self.target_pool[source_name][track_id].mean_feature
-            
-        #     lost_features, lost_info = self.get_lost_feature(source_name, track_id) # lost匹配
-        #     area_features, area_info = self.get_area_feature(source_name, track_id) # 重疊區域匹配
-
-        #     if not len(lost_features) and not len(area_features):
-        #         continue
-
-        #     features = torch.stack([query_feature, *lost_features, *area_features])
-        #     distmat = 1 - torch.mm(features[:1], features[1:].t())
-        #     distmat = distmat.numpy()[0]
-
-        #     # log = f"query: {source_name}-{track_id} \n"
-        #     # log += f"lost: {lost_info} \n"
-        #     # log += f"area: {area_info} \n"
-        #     # log += f'cam1 ids: {self.target_pool["cam1"].keys()} \n'
-        #     # log += f'cam2 ids: {self.target_pool["cam2"].keys()} \n'
-        #     # log += f"distmat: {distmat} \n\n"
-        #     # with open('log.txt', 'a') as f:
-        #     #     f.write(log)
-
-        #     sort_index = np.argsort(distmat)[::-1]
-        #     lost_match = False
-        #     for i, index in enumerate(sort_index):
-        #         if distmat[index] <= self.match_thres:
-        #             break
-
-        #         # lost匹配
-        #         if len(lost_info) > index:
-        #             if lost_match: # 限制重複匹配
-        #                 continue
-        #             lost_match = True
-        #             s, t = lost_info[index]
-        #             self.remove_match_list(s, t)
-
-        #             mtarget = self.target_pool[s][t].mtarget
-        #             self.target_pool[s][t].update_state(TargetState.Match)
-        #             mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
-
-        #             # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img[-1])
-        #             # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-lost.jpg', self.target_pool[source_name][track_id].img[-1])
-        #         # 重疊區域匹配
-        #         else:
-        #             s, t = area_info[index-len(lost_info)]
-
-        #             q_target = self.target_pool[source_name][track_id]
-        #             m_target = self.target_pool[s][t]
-        #             t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
-        #             mtarget = t1.mtarget
-
-        #             t1.update_state(TargetState.Match)
-        #             mtarget.match(t2, self.frame_id, distmat[index])
-
-        #             # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img[-1])
-        #             # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat[index]:.4f}_{source_name}-{track_id}-area.jpg', self.target_pool[source_name][track_id].img[-1])
+                temp_match[s].add(t)
+                distmat_matrix[r, :] = self.match_thres + 1
+                cost += 1
 
         '''刪除遺失的target'''
         for source_name, track_id in self.target_lost_deque[-1]:
@@ -318,9 +267,9 @@ class MultiSourceTracker:
         feature_info = [] # 用來存放比較的target
         if self.target_pool[source_name][track_id].state == TargetState.New:
             for s, t in self.source_match_list[source_name]:
-                # features.append(self.target_pool[s][t].feature)
-                features.append(self.target_pool[s][t].mean_feature)
-                feature_info.append((s, t))
+                if self.target_pool[s][t].frame_id <= self.target_pool[source_name][track_id].fast_frame_id:
+                    features.append(self.target_pool[s][t].mean_feature)
+                    feature_info.append((s, t))
         return features, feature_info
     
     def get_area_feature(self, source_name, track_id):

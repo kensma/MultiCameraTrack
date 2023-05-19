@@ -7,6 +7,8 @@ from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
 import torch
 from yolov7.utils.datasets import letterbox
+from multiprocessing import shared_memory
+from functools import reduce
 
 class TrackPipelineThread(threading.Thread):
 
@@ -20,28 +22,32 @@ class TrackPipelineThread(threading.Thread):
             self.shape = self.load_data.get_shape()
             self.shape = (self.shape[1], self.shape[0], 3)
             self.batch_size = batch_size
+            self.batch_shape = (batch_size, *self.shape)
 
             self.start()
 
         def run(self):
-            img0s = []
-            imgs = []
-            shapes = []
+            im0s = []
+            cost = 0
+            shm = shared_memory.SharedMemory(create=True, size=reduce(lambda x, y: x * y, self.batch_shape))
+            shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
             while True:
                 if pause_queue_name == self.name:
                     continue
                 img0 = next(self.load_data)
                 if img0 is None:
                     break
-                img, _, _ = letterbox(img0, (512, 512), auto=False, scaleup=True)
-                img = img.transpose(2, 0, 1)
 
-                img0s.append(img0)
-                imgs.append(img)
-                if len(img0s) == self.batch_size:
-                    self.detect_queue.put((self.name, img0s, imgs, self.shape))
-                    img0s = []
-                    imgs = []
+                shm_array[cost, :] = img0
+                if cost == self.batch_size-1:
+                    self.detect_queue.put((self.name, shm.name, self.batch_shape))
+
+                    shm.close()
+                    cost = 0
+                    shm = shared_memory.SharedMemory(create=True, size=reduce(lambda x, y: x * y, self.batch_shape))
+                    shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
+                else:
+                    cost += 1
 
     def __init__(self, config):
         threading.Thread.__init__(self)
@@ -63,10 +69,12 @@ class TrackPipelineThread(threading.Thread):
     def run(self):
         global pause_queue_name
         while self.is_run:
-            name, im0s, imgs, shape = self.detect_queue.get()
+            name, shm_name, batch_shape = self.detect_queue.get()
+            shm = shared_memory.SharedMemory(name=shm_name)
+            im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
 
             # t0 = time.time()
-            pred = self.detect(imgs, shape)
+            pred = self.detect(shm_name, batch_shape)
             # pred = np.zeros((self.batch_size, 1, 6))
             # print('detect time: ', time.time() - t0)
 
@@ -74,7 +82,7 @@ class TrackPipelineThread(threading.Thread):
                 target_output = self.trackers[name].update(pred[i], im0s[i].shape, im0s[i].shape)
                 target = [[*t.tlbr, t.score, t.cls, t.track_id] for t in target_output]
 
-                self.result[name].put((im0s[i], pred[i], target))
+                self.result[name].put((im0s[i].copy(), pred[i], target))
 
                 # 防止某個queue太多，導致其他queue都要等待
                 qsizes = [self.result
@@ -90,6 +98,9 @@ class TrackPipelineThread(threading.Thread):
                 #     print(f"{name}: ", self.result[name].qsize())
                 # print("pause_queue_name: ", pause_queue_name)
                 # print("=====================================")
+            
+            shm.close()
+            shm.unlink()
 
     def add_put_queue_thread(self, load_data, name):
         self.put_queue_threads.append(
