@@ -8,12 +8,13 @@ from tracker.basetrack.byte_tracker import BYTETracker
 import torch
 from yolov7.utils.datasets import letterbox
 from multiprocessing import shared_memory
+from multiprocessing.managers import SharedMemoryManager
 from functools import reduce
 
 class TrackPipelineThread(threading.Thread):
 
     class PutQueueThread(threading.Thread):
-        def __init__(self, detect_queue, batch_size, load_data, name):
+        def __init__(self, detect_queue, batch_size, smm, load_data, name):
             threading.Thread.__init__(self)
             self.detect_queue = detect_queue
             self.load_data = load_data
@@ -23,13 +24,13 @@ class TrackPipelineThread(threading.Thread):
             self.shape = (self.shape[1], self.shape[0], 3)
             self.batch_size = batch_size
             self.batch_shape = (batch_size, *self.shape)
+            self.smm = smm
 
             self.start()
 
         def run(self):
-            im0s = []
             cost = 0
-            shm = shared_memory.SharedMemory(create=True, size=reduce(lambda x, y: x * y, self.batch_shape))
+            shm = self.smm.SharedMemory(size=reduce(lambda x, y: x * y, self.batch_shape))
             shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
             while True:
                 if pause_queue_name == self.name:
@@ -44,7 +45,7 @@ class TrackPipelineThread(threading.Thread):
 
                     shm.close()
                     cost = 0
-                    shm = shared_memory.SharedMemory(create=True, size=reduce(lambda x, y: x * y, self.batch_shape))
+                    shm = self.smm.SharedMemory(size=reduce(lambda x, y: x * y, self.batch_shape))
                     shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
                 else:
                     cost += 1
@@ -65,6 +66,9 @@ class TrackPipelineThread(threading.Thread):
 
         global pause_queue_name
         pause_queue_name = None
+
+        self.smm = SharedMemoryManager()
+        self.smm.start()
 
     def run(self):
         global pause_queue_name
@@ -104,7 +108,7 @@ class TrackPipelineThread(threading.Thread):
 
     def add_put_queue_thread(self, load_data, name):
         self.put_queue_threads.append(
-            TrackPipelineThread.PutQueueThread(self.detect_queue, self.batch_size, load_data, name))
+            TrackPipelineThread.PutQueueThread(self.detect_queue, self.batch_size, self.smm, load_data, name))
         self.result[name] = queue.Queue(self.batch_size*3) # 自少要有三倍的空間，不然會卡住
         self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']), frame_rate=int(load_data.get_fps()))
         self.source_names.append(name)
