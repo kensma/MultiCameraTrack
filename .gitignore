@@ -267,6 +267,6 @@ time_consuming.csv
 
 test.py
 
-config.yaml
+config*.yaml
 
 run/*

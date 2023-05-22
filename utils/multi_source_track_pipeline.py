@@ -126,8 +126,10 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                     self.target_file.write(line)
 
                 if self.plot_result:
-                    for *xyxy, conf, cls, track_id, match_id in targets:
+                    for *xyxy, conf, cls, track_id, match_id, match_conf in targets:
                         label = f'{names[int(cls)]}  {int(track_id)}  {conf:.2f} #{match_id}'
+                        if isinstance(match_conf, float):
+                            label += f' {match_conf:.4f}'
                         plot_one_box(xyxy, img, label=label, color=colors[int(cls)], line_thickness=self.line_thickness)
         
                 self.video_writer.write(img)

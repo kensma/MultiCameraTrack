@@ -38,9 +38,11 @@ class TargetNode:
     def update_state(self, state):
         self.state = state
         if state == TargetState.Match:
-            self.find_match_list.clear()
+            pass
+            # self.find_match_list.clear()
         elif state == TargetState.Lost:
-            self.mtarget.match_dict[self.origin] = -1
+            pass
+            # self.mtarget.match_dict[self.origin] = -1
 
     def update_feature_img(self, img, conf, feature, replace=None):
         if replace == None:
@@ -58,7 +60,7 @@ class TargetNode:
     def update(self, frame_id, xyxy):
         self.frame_id = frame_id
         self.xyxy = xyxy
-        self.mtarget.match_dict[self.origin] = self.track_id
+        # self.mtarget.match_dict[self.origin] = self.track_id
         if self.mtarget.is_match:
             self.update_state(TargetState.Match)
         else:
@@ -72,17 +74,26 @@ class MTargetNode:
     def __init__(self, mTarget_id, target):
         self.mTarget_id = mTarget_id
         self.match_dict = defaultdict(self._default_match_dict())
+        self.min_frame_id = target.frame_id
 
         self.match_dict[target.origin] = target.track_id
-        self.min_frame_id = target.frame_id
+        self.match_count = 1
         self.is_match = False
 
     def match(self, target_node, frame_id, match_conf=None):
-        self.is_match = True
         self.match_dict[target_node.origin] = target_node.track_id
+        self.match_count += 1
+        if self.match_count >= 2:
+            self.is_match = True
         target_node.mtarget = self
         target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
         target_node.update_state(TargetState.Match)
+
+    def unmatch(self, target_node):
+        self.match_dict[target_node.origin] = -1
+        self.match_count -= 1
+        if self.match_count < 2:
+            self.is_match = False
 
 class MultiSourceTracker:
     def __init__(self, config, source_names):
@@ -168,11 +179,16 @@ class MultiSourceTracker:
 
         '''更新匹配list'''
         for source_name, track_id in self.target_lost_deque[self.min_match_lost]:
-            if self.target_pool[source_name][track_id].state == TargetState.Lost:
-                # TODO 加入距離匹配
-                for s in self.source_names:
-                    if self.target_pool[source_name][track_id].mtarget.match_dict[s] == -1:
+            target = self.target_pool[source_name][track_id]
+            if target.state == TargetState.Lost:
+                if target.mtarget.is_match:
+                    del self.target_pool[source_name][track_id]
+                    self.target_lost_deque[self.min_match_lost].remove((source_name, track_id))
+                else:
+                    # TODO 加入距離匹配
+                    for s in self.source_names:
                         self.add_match_list(source_name, track_id, s)
+                target.mtarget.unmatch(target)
 
         '''匹配target'''
         lost_info_list = []
@@ -244,6 +260,7 @@ class MultiSourceTracker:
                     t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
                     mtarget = t1.mtarget
 
+                    self.remove_match_list(t1.origin, t1.track_id)
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, self.frame_id, distmat_matrix[index])
 
@@ -302,8 +319,7 @@ class MultiSourceTracker:
             for *xyxy, conf, cls, track_id in targets:
                 target = self.target_pool[source_name][track_id]
                 mtarget = target.mtarget
-                res_id = mtarget.mTarget_id
-                res[source_name].append((*xyxy, conf, cls, track_id, res_id))
+                res[source_name].append((*xyxy, conf, cls, track_id, mtarget.mTarget_id, target.match_conf))
         return res
     
     def stop(self):
