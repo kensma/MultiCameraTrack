@@ -103,17 +103,17 @@ class AsyncDetect:
             detect = Detect(self.cfg)
             self.out_queue.put("OK")
             while True:
-                idx, shm_name, batch_shape, start, end = self.in_queue.get()
+                idx, shm_name, batch_shape = self.in_queue.get()
                 if isinstance(idx, AsyncDetect._StopToken):
                     break
                 shm = shared_memory.SharedMemory(name=shm_name)
                 im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
-                res = detect(im0s[start:end])
+                res = detect(im0s)
                 self.out_queue.put((idx, res))
                 shm.close()
 
     def __init__(self, cfg):
-        self.num_detect = cfg.num_detect
+        self.num_detect = len(cfg.device)
         self.batch_size = cfg.batch_size
         self.imgsz = cfg.imgsz
         self.in_queue = mp.Queue(self.num_detect)
@@ -129,17 +129,36 @@ class AsyncDetect:
         for _ in range(self.num_detect):
             _ = self.out_queue.get()
 
-    def __call__(self, shm_name, batch_shape):
-        for i in range(self.num_detect):
-            start = self.batch_size*i
-            end = self.batch_size*(i+1)
-            self.in_queue.put((i, shm_name, batch_shape, start, end))
+        self.conut = 0
 
-        res = []
-        for _ in range(self.num_detect):
-            idx, data = self.out_queue.get()
-            res[self.batch_size*idx:self.batch_size*idx] = data
-        return res
+    def put(self, key, shm_name, batch_shape):
+        self.in_queue.put((key, shm_name, batch_shape))
+
+    def get(self, key):
+        while True:
+            out_key, res = self.out_queue.get()
+            if out_key == key:
+                return res
+            self.in_queue.put((out_key, res))
+
+    def __call__(self, shm_name, batch_shape):
+        self.conut += 1
+        key = self.conut
+        self.put(key, shm_name, batch_shape)
+        return self.get(key)
+
+
+    # def __call__(self, shm_name, batch_shape):
+    #     for i in range(self.num_detect):
+    #         start = self.batch_size*i
+    #         end = self.batch_size*(i+1)
+    #         self.in_queue.put((i, shm_name, batch_shape, start, end))
+
+    #     res = []
+    #     for _ in range(self.num_detect):
+    #         idx, data = self.out_queue.get()
+    #         res[self.batch_size*idx:self.batch_size*idx] = data
+    #     return res
     
     def stop(self):
         for _ in self.detects:

@@ -10,42 +10,46 @@ import csv
 import os
 import random
 import cv2
+from attrdict import AttrDict
 
 from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
 from utils.track_pipeline import TrackPipelineThread
 from utils.multi_source_tracker import MultiSourceTracker
 from utils.file_utls import CSVFile
 from yolov7.utils.plots import plot_one_box
+from utils.reid import AsyncPredictor
 
 
 class BaseMultiSourceTrackPipeline(threading.Thread):
-    def __init__(self, config):
+    def __init__(self, cfg):
         threading.Thread.__init__(self)
         self.name = "MultiSourceTrackPipeline[{}]".format(self.name)
 
-        self.track_pipeline = TrackPipelineThread(config)
+        self.track_pipeline = TrackPipelineThread(cfg)
         self.load_data_threads = {}
 
-        for source in config['sources']:
+        for source in cfg.sources:
             name = source['name']
-            if config['sourceType'] == 'webcam':
+            if cfg.sourceType == 'webcam':
                 self.load_data_threads[name] = LoadWebcam(**source)
-            elif config['sourceType'] == 'video':
+            elif cfg.sourceType == 'video':
                 self.load_data_threads[name] = LoadVideo(**source)
-            elif config['sourceType'] == 'image':
+            elif cfg.sourceType == 'image':
                 self.load_data_threads[name] = LoadImage(**source)
 
             self.track_pipeline.add_put_queue_thread(self.load_data_threads[name], name)
             
         self.source_names = self.load_data_threads.keys()
         self.frame_id = 0
-        self.max_frame_id = config['MultiSourceTracker']['max_frame']
+        self.max_frame_id = cfg.MultiSourceTracker.max_frame
 
         self.track_pipeline.start()
 
         self.is_run = True
 
-        self.multi_source_tracker = MultiSourceTracker(config['MultiSourceTracker'], self.source_names)
+        self.predictor = AsyncPredictor(cfg.reid)
+
+        self.multi_source_tracker = MultiSourceTracker(cfg.MultiSourceTracker, self.source_names, self.predictor)
     def run(self):
         while self.is_run:
             self.frame_id += 1
@@ -163,21 +167,22 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
         def stop(self):
             self.is_run = False
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, cfg):
+        super().__init__(cfg)
 
         self.return_queues = {x: queue.Queue(64) for x in self.load_data_threads.keys()}
 
-        self.save_result = config['MultiSourceTracker']['save_result']
+        self.save_result = cfg.MultiSourceTracker.save_result
         if self.save_result:
-            self.save_root_path = config['MultiSourceTracker']['save_root_path']
-            self.plot_result = config['MultiSourceTracker']['plot_result']
-            self.plot_line_thickness = config['MultiSourceTracker']['plot_line_thickness']
+            self.save_root_path = cfg.MultiSourceTracker.save_root_path
+            self.plot_result =  cfg.MultiSourceTracker.plot_result
+            self.plot_line_thickness = cfg.MultiSourceTracker.plot_line_thickness
 
 
             random.seed(10)
             global names, colors
-            names = config['detector']['names']
+            with open(cfg.detector.names, newline='') as f:
+                names = f.read().split('\n')
             colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
             self.writers = {}
@@ -205,7 +210,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
     def get_result(self, name):
         return self.return_queues[name].get()
-    
+        
     def stop(self):
         if self.save_result:
             for writer in self.writers.values():

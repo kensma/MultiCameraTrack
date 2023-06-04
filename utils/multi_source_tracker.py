@@ -1,12 +1,10 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as T
 import cv2
 from collections import deque, defaultdict
-
-from utils.predictor import AsyncPredictor
-
-from fastreid.config import get_cfg
+from attrdict import AttrDict
 
 class TargetState(object):
     New = 0
@@ -96,22 +94,20 @@ class MTargetNode:
             self.is_match = False
 
 class MultiSourceTracker:
-    def __init__(self, config, source_names):
+    @torch.no_grad()
+    def __init__(self, cfg, source_names, predictor):
         self.source_names = source_names
-        self.config = config
+        self.cfg = cfg
 
-        cfg = get_cfg()
-        cfg.merge_from_file(self.config['predictor_config'])
-        cfg.freeze()
-        self.predictor = AsyncPredictor(cfg, num_gpus=1)
-        _ = self.predictor([np.zeros((200, 200, 3), dtype=np.uint8)])
+        self.predictor = predictor
+        self.img_transform = self.predictor.img_transform
 
         self.frame_id  = 0
         self.count = 0
-        self.max_target_lost = self.config['max_target_lost'] # 丟失多少幀後刪除
-        self.match_thres = self.config['match_thres'] # 匹配閾值
-        self.min_match_lost = self.config['min_match_lost'] # 最少lost多少幀後才匹配
-        self.areas = self.config['areas'] # 重疊區域
+        self.max_target_lost = self.cfg.max_target_lost # 丟失多少幀後刪除
+        self.match_thres = self.cfg.match_thres # 匹配閾值
+        self.min_match_lost = self.cfg.min_match_lost # 最少lost多少幀後才匹配
+        self.areas = self.cfg.areas # 重疊區域
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
         self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id
@@ -124,6 +120,7 @@ class MultiSourceTracker:
                 for n2 in area_sort[i+1:]:
                     self.area_match[n].add(n2)
 
+    @torch.no_grad()
     def update(self, data):
         self.frame_id += 1
         reslut_target = {}
@@ -131,9 +128,9 @@ class MultiSourceTracker:
 
         '''更新feature and frame_id'''
         # 遍歷source
+        imgs, img_info = [], []
         for source_name, (img, pred, targets) in data.items():
             reslut_target[source_name] = []
-            imgs, img_info = [], []
             # 遍歷targets
             for *xyxy, conf, cls, track_id in targets:
                 xyxy = list(map(lambda x: 0 if x < 0 else x, xyxy ))
@@ -147,29 +144,38 @@ class MultiSourceTracker:
                     self.remove_match_list(source_name, track_id)
 
                     if len(self.target_pool[source_name][track_id].conf) < 5:
-                        imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
-                        img_info.append((track_id, conf, None))
+                        im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
+                        im = self.img_transform(im)
+                        imgs.append(im)
+                        img_info.append((source_name, track_id, conf, None))
                     # conf比較高, 更新future
                     elif min(self.target_pool[source_name][track_id].conf) < conf:
                         i = np.argmin(self.target_pool[source_name][track_id].conf)
-                        imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
-                        img_info.append((track_id, conf, i))
+                        im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
+                        im = self.img_transform(im)
+                        imgs.append(im)
+                        img_info.append((source_name, track_id, conf, i))
                         pass
                 # 新target
                 else:
-                    imgs.append(img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :])
-                    img_info.append((track_id, conf, None))
+                    im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
+                    im = self.img_transform(im)
+                    imgs.append(im)
+                    img_info.append((source_name, track_id, conf, None))
                     self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, self.count, xyxy)
                     self.count += 1
                     self.target_lost_deque[0].append((source_name, track_id))
                 
                 reslut_target[source_name].append(self.target_pool[source_name][track_id])
 
-            if len(imgs):
-                features = F.normalize(self.predictor(imgs))
+        if len(imgs):
+            imgs_tensor = torch.stack(imgs)
+            features, _ = self.predictor(imgs_tensor)
+            features = F.normalize(features)
+            features = features.cpu()
 
-                for i, (img_id, conf, replace) in enumerate(img_info):
-                    self.target_pool[source_name][img_id].update_feature_img(imgs[i], conf, features[i], replace)
+            for i, (source_name, img_id, conf, replace) in enumerate(img_info):
+                self.target_pool[source_name][img_id].update_feature_img(imgs[i], conf, features[i], replace)
 
         '''更新Lost target state'''
         for source_name, track_id in self.target_lost_deque[1]:
@@ -215,6 +221,7 @@ class MultiSourceTracker:
             features = torch.stack([query_feature, *lost_features, *area_features])
             distmat = 1 - torch.mm(features[:1], features[1:].t())
             distmat = distmat.numpy()[0]
+            # distmat = distmat[0]
             distmats.append(distmat)
             max_len = max(max_len, distmat.shape[0])
         
@@ -323,6 +330,7 @@ class MultiSourceTracker:
         return res
     
     def stop(self):
-        self.predictor.stop()
+        # self.predictor.stop()
+        pass
 
 

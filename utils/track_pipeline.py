@@ -50,16 +50,16 @@ class TrackPipelineThread(threading.Thread):
                 else:
                     cost += 1
 
-    def __init__(self, config):
+    def __init__(self, cfg):
         threading.Thread.__init__(self)
         self.name = "TrackPipelineThread[{}]".format(self.name)
-        self.config = config
-        self.batch_size = self.config['detector']['batch_size'] * self.config['detector']['num_detect']
-        self.detect_queue = queue.Queue(self.config['detector']['detect_queue_size'])
+        self.cfg = cfg
+        self.batch_size = self.cfg.detector.batch_size
+        self.detect_queue = queue.Queue(self.cfg.detector.detect_queue_size)
         self.result = {}
         self.put_queue_threads = []
         self.source_names = []
-        self.detect = AsyncDetect(AttrDict(self.config['detector']))
+        self.detect = AsyncDetect(self.cfg.detector)
         self.trackers = {}
 
         self.is_run = True
@@ -77,10 +77,7 @@ class TrackPipelineThread(threading.Thread):
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
 
-            # t0 = time.time()
             pred = self.detect(shm_name, batch_shape)
-            # pred = np.zeros((self.batch_size, 1, 6))
-            # print('detect time: ', time.time() - t0)
 
             for i in range(len(im0s)):
                 target_output = self.trackers[name].update(pred[i], im0s[i].shape, im0s[i].shape)
@@ -110,7 +107,7 @@ class TrackPipelineThread(threading.Thread):
         self.put_queue_threads.append(
             TrackPipelineThread.PutQueueThread(self.detect_queue, self.batch_size, self.smm, load_data, name))
         self.result[name] = queue.Queue(self.batch_size*3) # 自少要有三倍的空間，不然會卡住
-        self.trackers[name] = BYTETracker(AttrDict(self.config['tracker']), frame_rate=int(load_data.get_fps()))
+        self.trackers[name] = BYTETracker(self.cfg.tracker, frame_rate=int(load_data.get_fps()))
         self.source_names.append(name)
 
     def get_result(self, name):
