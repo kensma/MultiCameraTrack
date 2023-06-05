@@ -6,6 +6,8 @@ import cv2
 from collections import deque, defaultdict
 from attrdict import AttrDict
 
+from utils.reid import AsyncPredictor
+
 class TargetState(object):
     New = 0
     Match = 1
@@ -95,11 +97,12 @@ class MTargetNode:
 
 class MultiSourceTracker:
     @torch.no_grad()
-    def __init__(self, cfg, source_names, predictor):
+    def __init__(self, cfg, reid_cfg, source_names):
         self.source_names = source_names
         self.cfg = cfg
 
-        self.predictor = predictor
+        # 初始化 reid
+        self.predictor = AsyncPredictor(reid_cfg)
         self.img_transform = self.predictor.img_transform
 
         self.frame_id  = 0
@@ -129,7 +132,7 @@ class MultiSourceTracker:
         '''更新feature and frame_id'''
         # 遍歷source
         imgs, img_info = [], []
-        for source_name, (img, pred, targets) in data.items():
+        for source_name, (img, targets) in data.items():
             reslut_target[source_name] = []
             # 遍歷targets
             for *xyxy, conf, cls, track_id in targets:
@@ -322,7 +325,7 @@ class MultiSourceTracker:
     #TODO:緩存已處理好的target
     def get_result(self, data):
         res = defaultdict(list)
-        for source_name, (img, pred, targets) in data.items():
+        for source_name, (img, targets) in data.items():
             for *xyxy, conf, cls, track_id in targets:
                 target = self.target_pool[source_name][track_id]
                 mtarget = target.mtarget

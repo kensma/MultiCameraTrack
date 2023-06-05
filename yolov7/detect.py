@@ -129,37 +129,34 @@ class AsyncDetect:
         for _ in range(self.num_detect):
             _ = self.out_queue.get()
 
-        self.conut = 0
+        # self.conut = 0
 
-    def put(self, key, shm_name, batch_shape):
-        self.in_queue.put((key, shm_name, batch_shape))
+    # def put(self, key, shm_name, batch_shape):
+    #     self.in_queue.put((key, shm_name, batch_shape))
 
-    def get(self, key):
-        while True:
-            out_key, res = self.out_queue.get()
-            if out_key == key:
-                return res
-            self.in_queue.put((out_key, res))
-
-    def __call__(self, shm_name, batch_shape):
-        self.conut += 1
-        key = self.conut
-        self.put(key, shm_name, batch_shape)
-        return self.get(key)
-
+    # def get(self, key):
+    #     while True:
+    #         out_key, res = self.out_queue.get()
+    #         if out_key == key:
+    #             return res
+    #         self.in_queue.put((out_key, res))
 
     # def __call__(self, shm_name, batch_shape):
-    #     for i in range(self.num_detect):
-    #         start = self.batch_size*i
-    #         end = self.batch_size*(i+1)
-    #         self.in_queue.put((i, shm_name, batch_shape, start, end))
+    #     self.conut += 1
+    #     key = self.conut
+    #     self.put(key, shm_name, batch_shape)
+    #     return self.get(key)
 
-    #     res = []
-    #     for _ in range(self.num_detect):
-    #         idx, data = self.out_queue.get()
-    #         res[self.batch_size*idx:self.batch_size*idx] = data
-    #     return res
-    
+    @staticmethod
+    def predict(in_queue, out_queue, idx, shm_name, batch_shape):
+        in_queue.put((idx, shm_name, batch_shape))
+
+        while True:
+            out_idx, res = out_queue.get()
+            if out_idx == idx:
+                return res
+            out_queue.put((out_idx, res))
+
     def stop(self):
         for _ in self.detects:
             self.in_queue.put((self._StopToken, None, None, None, None))

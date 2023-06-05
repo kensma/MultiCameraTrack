@@ -64,9 +64,6 @@ class AsyncPredictor:
     class _StopToken:
         pass
 
-    class _InitToken:
-        pass
-
     class _PredictWorker(mp.Process):
         def __init__(self, cfg, in_queue, out_queue):
             mp.Process.__init__(self)
@@ -80,16 +77,13 @@ class AsyncPredictor:
             predictor.load_param(self.cfg.param)
             predictor.to(self.cfg.device)
             predictor.eval()
+            self.out_queue.put("OK")
 
             while True:
                 task = self.in_queue.get()
                 if isinstance(task, AsyncPredictor._StopToken):
                     break
                 idx, data = task
-
-                if isinstance(data, AsyncPredictor._InitToken):
-                    self.out_queue.put((idx, None))
-                    continue
 
                 imgs_tensor = data.to(self.cfg.device).float()
                 # t0 = time.time()
@@ -106,8 +100,8 @@ class AsyncPredictor:
 
         self.img_transform = ImgTransform(cfg)
 
+        _ = self.out_queue.get()
         self.conut = 0
-        _ = self.__call__(AsyncPredictor._InitToken())
 
     def put(self, key, data):
         self.in_queue.put((key, data))
@@ -124,3 +118,13 @@ class AsyncPredictor:
         key = self.conut
         self.put(key, images)
         return self.get(key)
+    
+    # @staticmethod
+    # def predict(in_queue, out_queue, idx, data):
+    #     in_queue.put((idx, data))
+
+    #     while True:
+    #         out_idx, res = out_queue.get()
+    #         if out_idx == idx:
+    #             return res
+    #         in_queue.put((out_idx, res))

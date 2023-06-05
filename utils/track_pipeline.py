@@ -7,113 +7,115 @@ from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
 import torch
 from yolov7.utils.datasets import letterbox
-from multiprocessing import shared_memory
+from multiprocessing import shared_memory, Process, Queue
 from multiprocessing.managers import SharedMemoryManager
 from functools import reduce
 
-class TrackPipelineThread(threading.Thread):
+from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
+
+class TrackPipelineProcess(Process):
 
     class PutQueueThread(threading.Thread):
-        def __init__(self, detect_queue, batch_size, smm, load_data, name):
+        def __init__(self, smm, batch_queue, batch_size, source, type):
             threading.Thread.__init__(self)
-            self.detect_queue = detect_queue
-            self.load_data = load_data
+
+            self.is_run = True
+
+            if type == "video":
+                self.load_data = LoadVideo(**dict(source))
+            elif type == "webcam":
+                self.load_data = LoadWebcam(**dict(source))
+            elif type == "image":
+                self.load_data = LoadImage(**dict(source))
             _ = next(self.load_data)
-            self.name = name
+
             self.shape = self.load_data.get_shape()
             self.shape = (self.shape[1], self.shape[0], 3)
+
+            self.batch_queue = batch_queue
             self.batch_size = batch_size
             self.batch_shape = (batch_size, *self.shape)
+
             self.smm = smm
+            self.buf_size = reduce(lambda x, y: x * y, self.batch_shape)
 
             self.start()
 
+
         def run(self):
-            cost = 0
-            shm = self.smm.SharedMemory(size=reduce(lambda x, y: x * y, self.batch_shape))
+            conut = 0
+            shm = self.smm.SharedMemory(size=self.buf_size)
             shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
-            while True:
-                if pause_queue_name == self.name:
-                    continue
+            while self.is_run:
                 img0 = next(self.load_data)
                 if img0 is None:
                     break
 
-                shm_array[cost, :] = img0
-                if cost == self.batch_size-1:
-                    self.detect_queue.put((self.name, shm.name, self.batch_shape))
-
+                shm_array[conut, :] = img0
+                if conut == self.batch_size - 1:
+                    self.batch_queue.put((shm.name, self.batch_shape))
                     shm.close()
-                    cost = 0
-                    shm = self.smm.SharedMemory(size=reduce(lambda x, y: x * y, self.batch_shape))
+                    conut = 0
+                    shm = self.smm.SharedMemory(size=self.buf_size)
                     shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
                 else:
-                    cost += 1
+                    conut += 1
 
-    def __init__(self, cfg):
-        threading.Thread.__init__(self)
-        self.name = "TrackPipelineThread[{}]".format(self.name)
+        def stop(self):
+            self.is_run = False
+            self.load_data.stop()
+
+    def __init__(self, cfg, smm_address, detect, source):
+        Process.__init__(self)
+        self.name = "TrackPipelineProcess[{}]".format(self.name)
         self.cfg = cfg
         self.batch_size = self.cfg.detector.batch_size
-        self.detect_queue = queue.Queue(self.cfg.detector.detect_queue_size)
-        self.result = {}
-        self.put_queue_threads = []
-        self.source_names = []
-        self.detect = AsyncDetect(self.cfg.detector)
-        self.trackers = {}
-
+        self.source_name = source.name
+        self.result = Queue(self.batch_size*3) # 自少要有三倍的空間，不然會卡住
+        self.source = source
         self.is_run = True
+        self.smm_address = smm_address
 
-        global pause_queue_name
-        pause_queue_name = None
+        self.detect_in, self.detect_out = detect
 
-        self.smm = SharedMemoryManager()
-        self.smm.start()
+        # self.fps = 0
+        # self.img_shape = None
 
     def run(self):
-        global pause_queue_name
+        smm = SharedMemoryManager(address=self.smm_address)
+
+        batch_queue = queue.Queue(self.cfg.detector.detect_queue_size)
+        put_queue_thread = self.PutQueueThread(smm, batch_queue, self.batch_size, self.source, self.cfg.sourceType)
+        # self.fps = put_queue_thread.load_data.get_fps()
+        # self.img_shape = put_queue_thread.shape
+
+        tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
+
         while self.is_run:
-            name, shm_name, batch_shape = self.detect_queue.get()
+            shm_name, batch_shape = batch_queue.get(timeout=5000)
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
 
-            pred = self.detect(shm_name, batch_shape)
+            # pred = self.detect(shm_name, batch_shape)
+            pred = AsyncDetect.predict(self.detect_in, self.detect_out, self.source_name, shm_name, batch_shape)
 
-            for i in range(len(im0s)):
-                target_output = self.trackers[name].update(pred[i], im0s[i].shape, im0s[i].shape)
+            targets = []
+            for i in range(self.batch_size):
+                target_output = tracker.update(pred[i], im0s[i].shape, im0s[i].shape)
                 target = [[*t.tlbr, t.score, t.cls, t.track_id] for t in target_output]
+                targets.append(target)
 
-                self.result[name].put((im0s[i].copy(), pred[i], target))
-
-                # 防止某個queue太多，導致其他queue都要等待
-                qsizes = [self.result
-                [name].qsize() for name in self.source_names]
-                max_qsize_index = np.argmax(qsizes)
-                min_qsize_index = np.argmin(qsizes)
-                if qsizes[max_qsize_index] - qsizes[min_qsize_index] > self.batch_size:
-                    pause_queue_name = self.source_names[max_qsize_index]
-                else:
-                    pause_queue_name = None
-                # print("=====================================")
-                # for name in self.source_names:
-                #     print(f"{name}: ", self.result[name].qsize())
-                # print("pause_queue_name: ", pause_queue_name)
-                # print("=====================================")
+            self.result.put(((shm_name, batch_shape), pred, targets))
             
             shm.close()
-            shm.unlink()
 
-    def add_put_queue_thread(self, load_data, name):
-        self.put_queue_threads.append(
-            TrackPipelineThread.PutQueueThread(self.detect_queue, self.batch_size, self.smm, load_data, name))
-        self.result[name] = queue.Queue(self.batch_size*3) # 自少要有三倍的空間，不然會卡住
-        self.trackers[name] = BYTETracker(self.cfg.tracker, frame_rate=int(load_data.get_fps()))
-        self.source_names.append(name)
+        put_queue_thread.stop()
+        put_queue_thread.join()
+        smm.unlink()
 
-    def get_result(self, name):
-        return self.result[name].get()
+    def get_result(self):
+        return self.result.get()
 
     def stop(self):
         self.is_run = False
-        self.detect.stop()
-        print("TrackPipelineThread stop")
+        print(f"{self.source_name} TrackPipelineProcess stop")
