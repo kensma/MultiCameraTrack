@@ -71,7 +71,7 @@ class TrackPipelineProcess(Process):
         self.cfg = cfg
         self.batch_size = self.cfg.detector.batch_size
         self.source_name = source.name
-        self.result = Queue(self.batch_size*3) # 自少要有三倍的空間，不然會卡住
+        self.result = Queue(self.cfg.detector.detect_queue_size*3) # 自少要有三倍的空間，不然會卡住
         self.source = source
         self.is_run = True
         self.smm_address = smm_address

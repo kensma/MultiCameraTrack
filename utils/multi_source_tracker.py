@@ -5,8 +5,14 @@ import torchvision.transforms as T
 import cv2
 from collections import deque, defaultdict
 from attrdict import AttrDict
+import os
 
 from utils.reid import AsyncPredictor
+
+# '''測試'''
+# test_tansform = T.Compose([
+#     T.ToPILImage(),
+# ])
 
 class TargetState(object):
     New = 0
@@ -14,7 +20,7 @@ class TargetState(object):
     Lost = 2
 
 class TargetNode:
-    def __init__(self, origin, cls, track_id, frame_id, mtarget_id, xyxy, img=None, conf=None, feature=None):
+    def __init__(self, origin, cls, track_id, frame_id, mtarget_id, xyxy, img=None, conf=None, feature=None, max_feature=5):
         self.origin = origin
         self.cls = cls
         self.track_id = track_id
@@ -22,9 +28,9 @@ class TargetNode:
         self.frame_id = frame_id
         self.xyxy = xyxy
 
-        self.img = deque([], maxlen=5)
-        self.conf = deque([], maxlen=5)
-        self.feature = deque([], maxlen=5)
+        self.img = deque([], maxlen=max_feature)
+        self.conf = deque([], maxlen=max_feature)
+        self.feature = deque([], maxlen=max_feature)
         self.mean_feature = None
         if feature != None:
             self.update_feature_img(img, conf, feature)
@@ -111,6 +117,8 @@ class MultiSourceTracker:
         self.match_thres = self.cfg.match_thres # 匹配閾值
         self.min_match_lost = self.cfg.min_match_lost # 最少lost多少幀後才匹配
         self.areas = self.cfg.areas # 重疊區域
+        self.min_frame_feature = self.cfg.min_frame_feature # 最少出現幀數
+        self.max_feature = self.cfg.max_feature # 最多特徵數
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
         self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id
@@ -146,26 +154,26 @@ class MultiSourceTracker:
                     self.target_pool[source_name][track_id].update(self.frame_id, xyxy)
                     self.remove_match_list(source_name, track_id)
 
-                    if len(self.target_pool[source_name][track_id].conf) < 5:
-                        im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
-                        im = self.img_transform(im)
-                        imgs.append(im)
-                        img_info.append((source_name, track_id, conf, None))
-                    # conf比較高, 更新future
-                    elif min(self.target_pool[source_name][track_id].conf) < conf:
-                        i = np.argmin(self.target_pool[source_name][track_id].conf)
-                        im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
-                        im = self.img_transform(im)
-                        imgs.append(im)
-                        img_info.append((source_name, track_id, conf, i))
-                        pass
+                    if self.frame_id - self.target_pool[source_name][track_id].fast_frame_id > self.min_frame_feature:
+                        if len(self.target_pool[source_name][track_id].conf) < self.max_feature:
+                            im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
+                            im = self.img_transform(im)
+                            imgs.append(im)
+                            img_info.append((source_name, track_id, conf, None))
+                        # conf比較高, 更新future
+                        elif min(self.target_pool[source_name][track_id].conf) < conf:
+                            i = np.argmin(self.target_pool[source_name][track_id].conf)
+                            im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
+                            im = self.img_transform(im)
+                            imgs.append(im)
+                            img_info.append((source_name, track_id, conf, i))
                 # 新target
                 else:
                     im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
                     im = self.img_transform(im)
                     imgs.append(im)
                     img_info.append((source_name, track_id, conf, None))
-                    self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, self.count, xyxy)
+                    self.target_pool[source_name][track_id] = TargetNode(source_name, cls, track_id, self.frame_id, self.count, xyxy, max_feature=self.max_feature)
                     self.count += 1
                     self.target_lost_deque[0].append((source_name, track_id))
                 
@@ -208,6 +216,10 @@ class MultiSourceTracker:
         for source_name, track_id in self.target_lost_deque[0]:
             if not len(self.source_match_list[source_name]) and not len(self.area_match[source_name]):
                 continue
+
+            if len(self.target_pool[source_name][track_id].feature) < self.max_feature:
+                continue
+
             query_feature = self.target_pool[source_name][track_id].mean_feature
             
             lost_features, lost_info = self.get_lost_feature(source_name, track_id) # lost匹配
@@ -252,12 +264,22 @@ class MultiSourceTracker:
                         continue
 
                     self.remove_match_list(s, t)
+                    # self.remove_match_list(q_source_name, q_track_id)
                     mtarget = self.target_pool[s][t].mtarget
                     self.target_pool[s][t].update_state(TargetState.Match)
                     mtarget.match(self.target_pool[q_source_name][q_track_id], self.frame_id, distmat_matrix[index])
 
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-lost.jpg', self.target_pool[s][t].img[-1])
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-lost.jpg', self.target_pool[source_name][track_id].img[-1])
+                    # '''測試'''
+                    # path = f'test/{self.frame_id}-{mtarget.mTarget_id}'
+                    # if not os.path.isdir(path):
+                    #     os.mkdir(path)
+                    # for i, img in enumerate(self.target_pool[s][t].img):
+                    #     test_tansform(self.target_pool[s][t].img[i]).save(f'{path}/{s}-{t}-{i}-lost.jpg')
+                    # for i, img in enumerate(self.target_pool[q_source_name][q_track_id].img):
+                    #     test_tansform(self.target_pool[q_source_name][q_track_id].img[i]).save(f'{path}/{q_source_name}-{q_track_id}-{i}-lost_q.jpg')
+                    # with open(f'distmat.txt', 'w') as f:
+                    #     f.write(str(distmat_matrix[index]))
+
                 # 重疊區域匹配
                 else:
                     s, t = area_info[i-len(lost_info)]
@@ -267,15 +289,23 @@ class MultiSourceTracker:
 
                     q_target = self.target_pool[q_source_name][q_track_id]
                     m_target = self.target_pool[s][t]
-                    t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.frame_id else (m_target, q_target)
+                    t1, t2 = (q_target, m_target) if q_target.mtarget.min_frame_id <= m_target.mtarget.min_frame_id else (m_target, q_target)
                     mtarget = t1.mtarget
 
                     self.remove_match_list(t1.origin, t1.track_id)
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, self.frame_id, distmat_matrix[index])
 
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}_{s}-{t}-area.jpg', self.target_pool[s][t].img[-1])
-                    # cv2.imwrite(f'test/#{mtarget.mTarget_id}-{distmat_matrix[index]:.4f}_{q_source_name}-{q_track_id}-area.jpg', self.target_pool[source_name][track_id].img[-1])
+                    # '''測試'''
+                    # path = f'test/{self.frame_id}-{mtarget.mTarget_id}'
+                    # if not os.path.isdir(path):
+                    #     os.mkdir(path)
+                    # for i, img in enumerate(t1.img):
+                    #     test_tansform(t1.img[i]).save(f'{path}/{t1.origin}-{t1.track_id}-{i}-area.jpg')
+                    # for i, img in enumerate(t2.img):
+                    #     test_tansform(t2.img[i]).save(f'{path}/{t2.origin}-{t2.track_id}-{i}-area_q.jpg')
+                    # with open(f'distmat.txt', 'w') as f:
+                    #     f.write(str(distmat_matrix[index]))
 
                 temp_match[s].add(t)
                 distmat_matrix[r, :] = self.match_thres + 1
@@ -294,9 +324,12 @@ class MultiSourceTracker:
         feature_info = [] # 用來存放比較的target
         if self.target_pool[source_name][track_id].state == TargetState.New:
             for s, t in self.source_match_list[source_name]:
-                if self.target_pool[s][t].frame_id <= self.target_pool[source_name][track_id].fast_frame_id:
-                    features.append(self.target_pool[s][t].mean_feature)
-                    feature_info.append((s, t))
+                if self.target_pool[s][t].frame_id > self.target_pool[source_name][track_id].fast_frame_id:
+                    continue
+                if len(self.target_pool[s][t].feature) < self.max_feature:
+                    continue
+                features.append(self.target_pool[s][t].mean_feature)
+                feature_info.append((s, t))
         return features, feature_info
     
     def get_area_feature(self, source_name, track_id):
@@ -308,7 +341,10 @@ class MultiSourceTracker:
             if target.mtarget.match_dict[s] == -1: # 限制在同一個相機只能匹配一次
                 for t_id, t in self.target_pool[s].items():
                     if t.state != TargetState.Lost:
-                        # features.append(t.feature)
+                        if self.target_pool[s][t_id].mtarget.is_match:
+                            continue
+                        if len(self.target_pool[s][t_id].feature) < self.max_feature:
+                            continue
                         features.append(t.mean_feature)
                         feature_info.append((s, t_id))
         return features, feature_info
@@ -329,7 +365,12 @@ class MultiSourceTracker:
             for *xyxy, conf, cls, track_id in targets:
                 target = self.target_pool[source_name][track_id]
                 mtarget = target.mtarget
-                res[source_name].append((*xyxy, conf, cls, track_id, mtarget.mTarget_id, target.match_conf))
+                mTarget_id = None
+                match_conf = None
+                if len(target.feature) >= self.max_feature:
+                    mTarget_id = mtarget.mTarget_id
+                    match_conf = target.match_conf
+                res[source_name].append((*xyxy, conf, cls, track_id, mTarget_id, match_conf))
         return res
     
     def stop(self):

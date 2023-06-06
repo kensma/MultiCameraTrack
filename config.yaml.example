@@ -41,6 +41,8 @@ MultiSourceTracker:
   max_target_lost: 300
   min_match_lost: 30
   match_thres: 0.08
+  min_frame_feature: 5
+  max_feature: 5
   save_target: True
   save_pred: True
   save_video: True

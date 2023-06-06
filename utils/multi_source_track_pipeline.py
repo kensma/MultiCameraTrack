@@ -121,7 +121,6 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             threading.Thread.__init__(self)
             self.name = "FileWriter[{}]".format(name)
             self.is_run = True
-            self.frame_id = 0
             self.updata_queue = queue.Queue(128)
             self.save_path = None
             self.name = name
@@ -145,17 +144,16 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
         def run(self):
             while self.is_run:
-                self.frame_id += 1
-                img, preds, targets = self.updata_queue.get()
+                frame_id, img, preds, targets = self.updata_queue.get()
 
                 if self.save_pred:
                     for pred in preds:
-                        line = [self.frame_id, *pred]
+                        line = [frame_id, *pred]
                         self.pred_file.write(line)
 
                 if self.save_target:
                     for target in targets:
-                        line = [self.frame_id, *target]
+                        line = [frame_id, *target]
                         self.target_file.write(line)
 
                 # if self.save_video:
@@ -170,11 +168,11 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                 #     self.video_writer.write(img)
             self.close_file()
 
-        def update(self, data, save_path):
+        def update(self, frame_id, data, save_path):
             if self.save_path != save_path:
                 self.save_path = save_path
                 self.create_file()
-            self.updata_queue.put(data)
+            self.updata_queue.put((frame_id, *data))
 
         def create_file(self):
             self.close_file()
@@ -249,7 +247,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                 self.return_queues[key].get()
             self.return_queues[key].put(value)
             if self.save_result:
-                self.writers[key].update(value, self.save_path)
+                self.writers[key].update(self.frame_id, value, self.save_path)
 
     def get_result(self, name):
         return self.return_queues[name].get()
