@@ -262,11 +262,14 @@ crashlytics.properties
 crashlytics-build.properties
 fabric.properties
 
-*.ipynb
-time_consuming.csv
+tools/*.ipynb
 
-test.py
+tools/est*.py
 
-config*.yaml
+cfg/*.yaml
 
 run/*
+
+test/*
+
+weights/*
