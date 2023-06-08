@@ -3,10 +3,7 @@ import queue
 import time
 from yolov7.detect import Detect, AsyncDetect
 import numpy as np
-from attrdict import AttrDict
 from tracker.basetrack.byte_tracker import BYTETracker
-import torch
-from yolov7.utils.datasets import letterbox
 from multiprocessing import shared_memory, Process, Queue
 from multiprocessing.managers import SharedMemoryManager
 from functools import reduce
@@ -90,9 +87,9 @@ class TrackPipelineProcess(Process):
         # self.img_shape = put_queue_thread.shape
 
         tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
-
+        conut = 0
         while self.is_run:
-            shm_name, batch_shape = batch_queue.get(timeout=5000)
+            shm_name, batch_shape = batch_queue.get()
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
 
@@ -101,6 +98,7 @@ class TrackPipelineProcess(Process):
 
             targets = []
             for i in range(self.batch_size):
+                conut += 1
                 target_output = tracker.update(pred[i], im0s[i].shape, im0s[i].shape)
                 target = [[*t.tlbr, t.score, t.cls, t.track_id] for t in target_output]
                 targets.append(target)

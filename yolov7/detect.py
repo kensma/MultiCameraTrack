@@ -1,23 +1,14 @@
-from collections.abc import Callable, Iterable, Mapping
-from typing import Any
 import torch
 import sys
-import cv2
 import numpy as np
-import random
 import torch.multiprocessing as mp
 from multiprocessing import shared_memory
-# import multiprocessing as mp
-# import threading
-# import queue
 import time
 
 sys.path.append('./yolov7')
 
-from yolov7.utils.torch_utils import select_device
 from yolov7.utils.datasets import letterbox
 from yolov7.utils.general import scale_coords, non_max_suppression, check_img_size
-from yolov7.utils.plots import plot_one_box
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import TracedModel
 

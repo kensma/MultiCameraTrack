@@ -1,26 +1,16 @@
 import threading
-from collections import deque
-from vidgear.gears import WriteGear
 from datetime import datetime
 import queue
 import numpy as np
-import json
-import atexit
-import csv
 import os
 import random
-import cv2
-from attrdict import AttrDict
 from multiprocessing import shared_memory
 from multiprocessing.managers import SharedMemoryManager
 
-from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
 from utils.track_pipeline import TrackPipelineProcess
 from utils.multi_source_tracker import MultiSourceTracker
 from utils.file_utls import CSVFile
-from yolov7.utils.plots import plot_one_box
-from yolov7.detect import Detect, AsyncDetect
-from utils.reid import AsyncPredictor
+from yolov7.detect import AsyncDetect
 
 
 class BaseMultiSourceTrackPipeline(threading.Thread):
@@ -116,6 +106,9 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
 class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
+    # class _StopToken:
+    #     pass
+
     class FileWriter(threading.Thread):
         def __init__(self, name, track_pipeline, save_target, save_pred, save_video, plot_result=False, line_thickness=1):
             threading.Thread.__init__(self)
@@ -123,7 +116,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.is_run = True
             self.updata_queue = queue.Queue(128)
             self.save_path = None
-            self.name = name
+            self.source_name = name
             self.is_open_file = False
             self.save_target = save_target
             self.save_pred = save_pred
@@ -146,6 +139,9 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             while self.is_run:
                 frame_id, img, preds, targets = self.updata_queue.get()
 
+                if frame_id == -1:
+                    break
+
                 if self.save_pred:
                     for pred in preds:
                         line = [frame_id, *pred]
@@ -167,6 +163,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             
                 #     self.video_writer.write(img)
             self.close_file()
+            print(f'{self.name} FileWriter stop')
 
         def update(self, frame_id, data, save_path):
             if self.save_path != save_path:
@@ -179,30 +176,31 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.is_open_file = True
 
             # if self.save_video:
-            #     video_file_name = f'{self.name}.mp4'
+            #     video_file_name = f'{self.source_name}.mp4'
             #     video_path = os.path.join(self.save_path, video_file_name)
             #     self.video_writer = WriteGear(video_path, compression_mode = True, **self.video_params)
 
             if self.save_pred:
-                self.pred_file = CSVFile(self.save_path, f'{self.name}_pred.csv')
+                self.pred_file = CSVFile(self.save_path, f'{self.source_name}_pred.csv')
 
             if self.save_target:
-                self.target_file = CSVFile(self.save_path, f'{self.name}_target.csv')
+                self.target_file = CSVFile(self.save_path, f'{self.source_name}_target.csv')
 
         def close_file(self):
             if self.is_open_file:
                 self.frame_id = 0
                 # if self.save_video:
                 #     self.video_writer.close()
-                if self.save_target:
-                    self.pred_file.close()
                 if self.save_pred:
+                    self.pred_file.close()
+                if self.save_target:
                     self.target_file.close()
                 
                 self.is_open_file = False
         
         def stop(self):
             self.is_run = False
+            self.updata_queue.put((-1, None, None, None))
 
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -256,4 +254,6 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
         if self.save_result:
             for writer in self.writers.values():
                 writer.stop()
+            for writer in self.writers.values():
+                writer.join()
         super().stop()

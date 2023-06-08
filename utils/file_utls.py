@@ -1,4 +1,3 @@
-import atexit
 import csv
 import os
 

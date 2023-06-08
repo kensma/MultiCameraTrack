@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
 import torchvision.transforms as T
+import cv2
+import random
 # import time
 
 from solider.swin_transformer import swin_base_patch4_window7_224, swin_small_patch4_window7_224, swin_tiny_patch4_window7_224
@@ -11,6 +13,38 @@ try:
 except RuntimeError:
     pass
 
+class letterbox:
+    def __init__(self, new_shape=(384, 128), color=(114, 114, 114), scaleup=True):
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+        self.new_shape = new_shape
+        self.color = color
+        self.scaleup = scaleup
+
+    def __call__(self, img):
+        # Resize and pad image while meeting stride-multiple constraints
+        shape = img.shape[:2]  # current shape [height, width]
+
+        # Scale ratio (new / old)
+        r = min(self.new_shape[0] / shape[0], self.new_shape[1] / shape[1])
+        if not self.scaleup:  # only scale down, do not scale up (for better test mAP)
+            r = min(r, 1.0)
+
+        # Compute padding
+        ratio = r, r  # width, height ratios
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        dw, dh = self.new_shape[1] - new_unpad[0], self.new_shape[0] - new_unpad[1]  # wh padding
+
+        dw /= 2  # divide padding into 2 sides
+        dh /= 2
+
+        if shape[::-1] != new_unpad:  # resize
+            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+        img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=self.color)  # add border
+        return img
+
 class ImgTransform:
     def __init__(self, cfg):
         self.img_size = cfg.img_size
@@ -18,8 +52,9 @@ class ImgTransform:
         self.std = cfg.pixel_std
 
         self.transform = T.Compose([
+            letterbox(self.img_size),
             T.ToTensor(),
-            T.Resize(self.img_size),
+            # T.Resize(self.img_size),
             T.Normalize(mean=self.mean, std=self.std)
         ])
     def __call__(self, img):
