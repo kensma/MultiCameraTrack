@@ -4,19 +4,23 @@ import time
 from yolov7.detect import Detect, AsyncDetect
 import numpy as np
 from tracker.basetrack.byte_tracker import BYTETracker
-from multiprocessing import shared_memory, Process, Queue
+from multiprocessing import shared_memory, Process, Queue, Value
 from multiprocessing.managers import SharedMemoryManager
 from functools import reduce
+import sys
 
 from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
+from utils.utils import StopToken
+
 
 class TrackPipelineProcess(Process):
 
     class PutQueueThread(threading.Thread):
-        def __init__(self, smm, batch_queue, batch_size, source, type):
+        def __init__(self, smm_address, batch_queue, is_run, batch_size, source, type):
             threading.Thread.__init__(self)
+            self.name = "PutQueueThread[{}]".format(self.name)
 
-            self.is_run = True
+            self.is_run = is_run
 
             if type == "video":
                 self.load_data = LoadVideo(**dict(source))
@@ -33,7 +37,7 @@ class TrackPipelineProcess(Process):
             self.batch_size = batch_size
             self.batch_shape = (batch_size, *self.shape)
 
-            self.smm = smm
+            self.smm = SharedMemoryManager(address=smm_address)
             self.buf_size = reduce(lambda x, y: x * y, self.batch_shape)
 
             self.start()
@@ -43,7 +47,7 @@ class TrackPipelineProcess(Process):
             conut = 0
             shm = self.smm.SharedMemory(size=self.buf_size)
             shm_array = np.ndarray(self.batch_shape, dtype=np.uint8, buffer=shm.buf)
-            while self.is_run:
+            while self.is_run.value:
                 img0 = next(self.load_data)
                 if img0 is None:
                     break
@@ -58,9 +62,10 @@ class TrackPipelineProcess(Process):
                 else:
                     conut += 1
 
-        def stop(self):
-            self.is_run = False
+            shm.close()
+            shm.unlink()
             self.load_data.stop()
+            
 
     def __init__(self, cfg, smm_address, detect, source):
         Process.__init__(self)
@@ -70,30 +75,24 @@ class TrackPipelineProcess(Process):
         self.source_name = source.name
         self.result = Queue(self.cfg.detector.detect_queue_size*3) # 自少要有三倍的空間，不然會卡住
         self.source = source
-        self.is_run = True
+        # self.is_run = True
         self.smm_address = smm_address
 
         self.detect_in, self.detect_out = detect
 
-        # self.fps = 0
-        # self.img_shape = None
+        self.is_run = Value('b', True)
 
     def run(self):
-        smm = SharedMemoryManager(address=self.smm_address)
-
         batch_queue = queue.Queue(self.cfg.detector.detect_queue_size)
-        put_queue_thread = self.PutQueueThread(smm, batch_queue, self.batch_size, self.source, self.cfg.sourceType)
-        # self.fps = put_queue_thread.load_data.get_fps()
-        # self.img_shape = put_queue_thread.shape
+        put_queue_thread = self.PutQueueThread(self.smm_address, batch_queue, self.is_run, self.batch_size, self.source, self.cfg.sourceType)
 
         tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
         conut = 0
-        while self.is_run:
+        while self.is_run.value:
             shm_name, batch_shape = batch_queue.get()
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
 
-            # pred = self.detect(shm_name, batch_shape)
             pred = AsyncDetect.predict(self.detect_in, self.detect_out, self.source_name, shm_name, batch_shape)
 
             targets = []
@@ -107,13 +106,16 @@ class TrackPipelineProcess(Process):
             
             shm.close()
 
-        put_queue_thread.stop()
-        put_queue_thread.join()
-        smm.unlink()
+        batch_queue.get()
+        while not self.result.empty():
+            self.result.get()
+        self.result.close()
+        self.result.join_thread()
+        print(f"{self.source_name} TrackPipelineProcess stop")
 
     def get_result(self):
         return self.result.get()
 
     def stop(self):
-        self.is_run = False
-        print(f"{self.source_name} TrackPipelineProcess stop")
+        self.is_run.value = False
+        self.result.get()

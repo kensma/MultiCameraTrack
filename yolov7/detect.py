@@ -11,6 +11,7 @@ from yolov7.utils.datasets import letterbox
 from yolov7.utils.general import scale_coords, non_max_suppression, check_img_size
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import TracedModel
+from utils.utils import StopToken
 
 try:
     mp.set_start_method('spawn')
@@ -79,9 +80,6 @@ class Detect:
 
 class AsyncDetect:
 
-    class _StopToken:
-        pass
-
     class _DetectWorker(mp.Process):
         def __init__(self, in_queue, out_queue, cfg):
             mp.Process.__init__(self)
@@ -95,7 +93,8 @@ class AsyncDetect:
             self.out_queue.put("OK")
             while True:
                 idx, shm_name, batch_shape = self.in_queue.get()
-                if isinstance(idx, AsyncDetect._StopToken):
+                if isinstance(idx, StopToken):
+                    shm.unlink()
                     break
                 shm = shared_memory.SharedMemory(name=shm_name)
                 im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
@@ -150,8 +149,9 @@ class AsyncDetect:
 
     def stop(self):
         for _ in self.detects:
-            self.in_queue.put((self._StopToken, None, None, None, None))
+            if self.in_queue.full():
+                self.in_queue.get()
+            self.in_queue.put((StopToken(), None, None))
         
-        for detect in self.detects:
-            while detect.is_alive():
-                self.out_queue.get()
+        while not self.out_queue.empty():
+            self.out_queue.get()

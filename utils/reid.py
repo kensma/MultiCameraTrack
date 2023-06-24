@@ -54,7 +54,7 @@ class ImgTransform:
         self.transform = T.Compose([
             letterbox(self.img_size),
             T.ToTensor(),
-            # T.Resize(self.img_size),
+            # T.Resize(self.img_size), # 維持長寬比實驗
             T.Normalize(mean=self.mean, std=self.std)
         ])
     def __call__(self, img):

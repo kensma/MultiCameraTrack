@@ -108,7 +108,7 @@ class MTargetNode:
         if self.match_count < 2:
             self.is_match = False
         
-        if not self.is_match and roll_back:
+        if not self.match_count == 1 and roll_back:
             for target in self.match_dict.values():
                 if target != None:
                     target.update_state(TargetState.Lost)
@@ -182,7 +182,12 @@ class MultiSourceTracker:
                     self.remove_match_list(source_name, track_id)
 
                     in_border = np.min(xyxy) < 0
+                    in_border = img.shape[0] < xyxy[3] or img.shape[1] < xyxy[2] or in_border
+                    # 前幾幀不做feature、當xyxy有負值(在邊界)不做feature
                     if self.frame_id - self.target_pool[source_name][track_id].fast_frame_id > self.min_frame_feature and not in_border:
+                    #人物完整性實驗
+                    # if True:
+                    #     xyxy = list(map(lambda x: 0 if x < 0 else x, xyxy ))
                         if len(self.target_pool[source_name][track_id].conf) < self.max_feature:
                             im = img[int(xyxy[1]):int(xyxy[3]), int(xyxy[0]):int(xyxy[2]), :]
                             im = self.img_transform(im)
@@ -239,6 +244,7 @@ class MultiSourceTracker:
             if not len(self.source_match_list[source_name]) and not len(self.area_match[source_name]):
                 continue
 
+            # 需要有足夠的特徵
             if len(self.target_pool[source_name][track_id].feature) < self.max_feature:
                 continue
 
@@ -331,7 +337,9 @@ class MultiSourceTracker:
                     #特徵距離優先
                     if q_target.match_conf and m_target.match_conf and q_target.match_conf < m_target.match_conf:
                         reverse = False
-                    elif q_target.mtarget.min_frame_id <= m_target.mtarget.min_frame_id:
+                    #TODO:需修改
+                    # elif q_target.mtarget.min_frame_id <= m_target.mtarget.min_frame_id:
+                    elif q_target.fast_frame_id <= m_target.fast_frame_id:
                         reverse = False
 
                     t1, t2 = (m_target, q_target) if reverse else (q_target, m_target)
@@ -368,10 +376,13 @@ class MultiSourceTracker:
         feature_info = [] # 用來存放比較的target
         if self.target_pool[source_name][track_id].state == TargetState.New:
             for s, t in self.source_match_list[source_name]:
+                # 需要是Lost狀態
                 if self.target_pool[s][t].state != TargetState.Lost:
                     continue
+                # 需要lost時間比query出現的時間早
                 if self.target_pool[s][t].frame_id > self.target_pool[source_name][track_id].fast_frame_id:
                     continue
+                # 需要有足夠的特徵
                 if len(self.target_pool[s][t].feature) < self.max_feature:
                     continue
                 features.append(self.target_pool[s][t].mean_feature)
@@ -389,6 +400,7 @@ class MultiSourceTracker:
                     if t.state != TargetState.Lost:
                         if self.target_pool[s][t_id].mtarget.is_match:
                             continue
+                        # 需要有足夠的特徵
                         if len(self.target_pool[s][t_id].feature) < self.max_feature:
                             continue
                         features.append(t.mean_feature)

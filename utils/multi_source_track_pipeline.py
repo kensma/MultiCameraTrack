@@ -4,12 +4,13 @@ import queue
 import numpy as np
 import os
 import random
+import time
 from multiprocessing import shared_memory
 from multiprocessing.managers import SharedMemoryManager
 
 from utils.track_pipeline import TrackPipelineProcess
 from utils.multi_source_tracker import MultiSourceTracker
-from utils.file_utls import CSVFile
+from utils.utils import CSVFile, StopToken
 from yolov7.detect import AsyncDetect
 
 
@@ -40,6 +41,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
         self.source_names = self.track_pipeline_processes.keys()
         self.frame_id = 0
+        self.tolal_time = 0
         self.max_frame_id = cfg.MultiSourceTracker.max_frame
 
         self.is_run = True
@@ -47,6 +49,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         # 初始化 multi_source_tracker
         self.multi_source_tracker = MultiSourceTracker(cfg.MultiSourceTracker, cfg.reid, self.source_names)
     def run(self):
+        t0 = time.time()
         while self.is_run:
             preds = {}
             tracks = {}
@@ -54,6 +57,8 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             im0s = {}
             for name, track_pipeline in self.track_pipeline_processes.items():
                 track_result = track_pipeline.get_result()
+                if isinstance(track_result, StopToken):
+                    break
                 (shm_name, batch_shape), preds[name], tracks[name]  = track_result
                 shms[name] = shared_memory.SharedMemory(name=shm_name)
                 im0s[name] = np.ndarray(batch_shape, dtype=np.uint8, buffer=shms[name].buf)
@@ -61,6 +66,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             for i in range(self.batch_size):
                 self.frame_id += 1
                 if self.max_frame_id != -1 and self.frame_id > self.max_frame_id:
+                    self.tolal_time = time.time() - t0
                     self.stop()
                     break
 
@@ -85,7 +91,14 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 shm.close()
                 shm.unlink()
 
+        self.detect.stop()
+        self.smm.shutdown()        
+        print("MultiSourceTrackPipeline stop")
+
     def stop(self):
+        for track_pipeline in self.track_pipeline_processes.values():
+            if track_pipeline.result.empty():
+                track_pipeline.result.put(StopToken())
         for track_pipeline in self.track_pipeline_processes.values():
             track_pipeline.stop()
         for track_pipeline in self.track_pipeline_processes.values():
@@ -93,10 +106,6 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
         self.multi_source_tracker.stop()
         self.is_run = False
-
-        self.smm.shutdown()
-        
-        print("MultiSourceTrackPipeline stop")
 
     def process_result(self, res):
         raise NotImplementedError
@@ -106,14 +115,10 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 
 class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
-    # class _StopToken:
-    #     pass
-
     class FileWriter(threading.Thread):
         def __init__(self, name, track_pipeline, save_target, save_pred, save_video, plot_result=False, line_thickness=1):
             threading.Thread.__init__(self)
             self.name = "FileWriter[{}]".format(name)
-            self.is_run = True
             self.updata_queue = queue.Queue(128)
             self.save_path = None
             self.source_name = name
@@ -136,10 +141,10 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
 
         def run(self):
-            while self.is_run:
+            while True:
                 frame_id, img, preds, targets = self.updata_queue.get()
 
-                if frame_id == -1:
+                if isinstance(frame_id, StopToken):
                     break
 
                 if self.save_pred:
@@ -199,8 +204,7 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                 self.is_open_file = False
         
         def stop(self):
-            self.is_run = False
-            self.updata_queue.put((-1, None, None, None))
+            self.updata_queue.put((StopToken(), None, None, None))
 
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -229,14 +233,15 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                 self.writers[key] = self.FileWriter(key, value, self.save_target, self.save_pred, self.save_video, self.plot_result, self.plot_line_thickness)
                 self.writers[key].start()
 
-    def get_datetime(self):
-        # return datetime.now().strftime("%Y-%m-%d_%H-%M")
-        return datetime.now().strftime("%Y-%m-%d")
+    # def get_datetime(self):
+    #     # return datetime.now().strftime("%Y-%m-%d_%H-%M")
+    #     return datetime.now().strftime("%Y-%m-%d")
 
     def process_result(self, res):
         if self.save_result:
-            datetime = self.get_datetime()
-            self.save_path = os.path.join(self.save_root_path, datetime)
+            # datetime = self.get_datetime()
+            # self.save_path = os.path.join(self.save_root_path, datetime)
+            self.save_path = self.save_root_path
             if not os.path.isdir(self.save_path):
                 os.mkdir(self.save_path)
 
@@ -251,6 +256,9 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
         return self.return_queues[name].get()
         
     def stop(self):
+        with open(os.path.join(self.save_root_path, 'info.txt'), 'w') as f:
+            f.write(f'max_frame: {self.max_frame_id}\n')
+            f.write(f'total time: {self.tolal_time:.2f}s')
         if self.save_result:
             for writer in self.writers.values():
                 writer.stop()

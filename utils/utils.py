@@ -1,6 +1,9 @@
 import csv
 import os
 
+class StopToken:
+        pass
+
 class BaseFile:
     def write(self):
         raise NotImplementedError
