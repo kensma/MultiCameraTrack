@@ -266,6 +266,37 @@ class MultiSourceTracker:
             distmat = distmat.numpy()[0]
             distmats.append(distmat)
             max_len = max(max_len, distmat.shape[0])
+
+            # '''餘弦距離結果合併實驗 start'''
+            # sort_index = np.argsort(distmat)
+            # lost_match = False
+            # for i, index in enumerate(sort_index):
+            #     if distmat[index] > self.match_thres:
+            #         break
+            #     # lost匹配
+            #     if len(lost_info) > index:
+            #         if lost_match: # 限制重複匹配
+            #             continue
+            #         s, t = lost_info[index]
+            #         mtarget = self.target_pool[s][t].mtarget
+            #         self.target_pool[s][t].update_state(TargetState.Match)
+            #         mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
+            #     # 重疊區域匹配
+            #     else:
+            #         s, t = area_info[index-len(lost_info)]
+            #         q_target = self.target_pool[source_name][track_id]
+            #         m_target = self.target_pool[s][t]
+            #         reverse = True
+            #         if q_target.match_conf and m_target.match_conf and q_target.match_conf < m_target.match_conf:
+            #             reverse = False
+            #         elif q_target.fast_frame_id <= m_target.fast_frame_id:
+            #             reverse = False
+            #         t1, t2 = (m_target, q_target) if reverse else (q_target, m_target)
+            #         mtarget = t1.mtarget
+
+            #         t1.update_state(TargetState.Match)
+            #         mtarget.match(t2, self.frame_id, distmat[index])
+            # '''餘弦距離結果合併實驗 end'''
         
         if len(distmats):
             distmat_matrix = np.full((len(distmats), max_len), self.match_thres + 1)
@@ -287,14 +318,6 @@ class MultiSourceTracker:
                 if len(lost_info) > i:
                     s, t = lost_info[i]
 
-                    # if len(self.target_pool[s][t].mtarget.lost_features):
-                    #     mtarget_lost_features = torch.stack(self.target_pool[s][t].mtarget.lost_features)
-                    #     distmat2 = 1 - torch.mm(features[:1], mtarget_lost_features.t())
-                    #     distmat2 = distmat2.numpy()[0]
-                    #     if np.min(distmat2) > self.match_thres:
-                    #         distmat_matrix[index] = self.match_thres + 1
-                    #         continue
-
                     if t in temp_match[s]:
                         distmat_matrix[index] = self.match_thres + 1
                         continue
@@ -303,28 +326,9 @@ class MultiSourceTracker:
                     self.target_pool[s][t].update_state(TargetState.Match)
                     mtarget.match(self.target_pool[q_source_name][q_track_id], self.frame_id, distmat_matrix[index])
 
-                    # '''測試'''
-                    # path = f'test/{self.frame_id}-{mtarget.mTarget_id}'
-                    # if not os.path.isdir(path):
-                    #     os.mkdir(path)
-                    # for i, img in enumerate(self.target_pool[s][t].img):
-                    #     test_tansform(self.target_pool[s][t].img[i]).save(f'{path}/{s}-{t}-{i}-lost.jpg')
-                    # for i, img in enumerate(self.target_pool[q_source_name][q_track_id].img):
-                    #     test_tansform(self.target_pool[q_source_name][q_track_id].img[i]).save(f'{path}/{q_source_name}-{q_track_id}-{i}-lost_q.jpg')
-                    # with open(f'{path}/distmat.txt', 'w') as f:
-                    #     f.write(str(distmat_matrix[index]))
-
                 # 重疊區域匹配
                 else:
                     s, t = area_info[i-len(lost_info)]
-
-                    # if len(self.target_pool[s][t].mtarget.lost_features):
-                    #     mtarget_lost_features = torch.stack(self.target_pool[s][t].mtarget.lost_features)
-                    #     distmat2 = 1 - torch.mm(features[:1], mtarget_lost_features.t())
-                    #     distmat2 = distmat2.numpy()[0]
-                    #     if np.min(distmat2) > self.match_thres:
-                    #         distmat_matrix[index] = self.match_thres + 1
-                    #         continue
 
                     if t in temp_match[s]:
                         distmat_matrix[index] = self.match_thres + 1
@@ -337,8 +341,6 @@ class MultiSourceTracker:
                     #特徵距離優先
                     if q_target.match_conf and m_target.match_conf and q_target.match_conf < m_target.match_conf:
                         reverse = False
-                    #TODO:需修改
-                    # elif q_target.mtarget.min_frame_id <= m_target.mtarget.min_frame_id:
                     elif q_target.fast_frame_id <= m_target.fast_frame_id:
                         reverse = False
 
@@ -347,17 +349,6 @@ class MultiSourceTracker:
 
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, self.frame_id, distmat_matrix[index])
-
-                    # '''測試'''
-                    # path = f'test/{self.frame_id}-{mtarget.mTarget_id}'
-                    # if not os.path.isdir(path):
-                    #     os.mkdir(path)
-                    # for i, img in enumerate(t1.img):
-                    #     test_tansform(t1.img[i]).save(f'{path}/{t1.origin}-{t1.track_id}-{i}-area.jpg')
-                    # for i, img in enumerate(t2.img):
-                    #     test_tansform(t2.img[i]).save(f'{path}/{t2.origin}-{t2.track_id}-{i}-area_q.jpg')
-                    # with open(f'{path}/distmat.txt', 'w') as f:
-                    #     f.write(str(distmat_matrix[index]))
 
                 temp_match[s].add(t)
                 distmat_matrix[r, :] = self.match_thres + 1

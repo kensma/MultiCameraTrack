@@ -67,6 +67,8 @@ class TrackPipelineProcess(Process):
             self.load_data.stop()
             
 
+    #平行化比較實驗
+    # def __init__(self, cfg, smm_address, detect, source, locks):
     def __init__(self, cfg, smm_address, detect, source):
         Process.__init__(self)
         self.name = "TrackPipelineProcess[{}]".format(self.name)
@@ -82,6 +84,8 @@ class TrackPipelineProcess(Process):
 
         self.is_run = Value('b', True)
 
+        # self.locks = locks #平行化比較實驗
+
     def run(self):
         batch_queue = queue.Queue(self.cfg.detector.detect_queue_size)
         put_queue_thread = self.PutQueueThread(self.smm_address, batch_queue, self.is_run, self.batch_size, self.source, self.cfg.sourceType)
@@ -89,18 +93,24 @@ class TrackPipelineProcess(Process):
         tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
         conut = 0
         while self.is_run.value:
+            # self.locks[0].acquire() #平行化比較實驗
             shm_name, batch_shape = batch_queue.get()
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
+            # self.locks[0].release() #平行化比較實驗
 
+            # self.locks[1].acquire() #平行化比較實驗
             pred = AsyncDetect.predict(self.detect_in, self.detect_out, self.source_name, shm_name, batch_shape)
+            # self.locks[1].release() #平行化比較實驗
 
+            # self.locks[2].acquire() #平行化比較實驗
             targets = []
             for i in range(self.batch_size):
                 conut += 1
                 target_output = tracker.update(pred[i], im0s[i].shape, im0s[i].shape)
                 target = [[*t.tlbr, t.score, t.cls, t.track_id] for t in target_output]
                 targets.append(target)
+            # self.locks[2].release() #平行化比較實驗
 
             self.result.put(((shm_name, batch_shape), pred, targets))
             

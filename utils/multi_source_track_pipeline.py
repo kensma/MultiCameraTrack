@@ -5,7 +5,8 @@ import numpy as np
 import os
 import random
 import time
-from multiprocessing import shared_memory
+import sys
+from multiprocessing import shared_memory, Lock
 from multiprocessing.managers import SharedMemoryManager
 
 from utils.track_pipeline import TrackPipelineProcess
@@ -26,17 +27,24 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.batch_size = cfg.detector.batch_size
 
         # # 初始化共享記憶體
-        self.smm_address=('', 50000)
+        if sys.platform == 'win32':
+            self.smm_address=('localhost', 50000)
+        else:
+            self.smm_address=('', 50000)
         self.smm = SharedMemoryManager(address=self.smm_address)
         self.smm.start()
 
         # 初始化 reid
         # self.predictor = AsyncPredictor(cfg.reid)
 
+        # 平行化比較實驗
+        # locks = [Lock() for _ in range(3)]
+
         # 初始化 track_pipeline
         self.track_pipeline_processes = {}
         for source in cfg.sources:
             self.track_pipeline_processes[source['name']] = TrackPipelineProcess(cfg, self.smm_address, (self.detect_in, self.detect_out), source)
+            # self.track_pipeline_processes[source['name']] = TrackPipelineProcess(cfg, self.smm_address, (self.detect_in, self.detect_out), source, locks) #平行化比較實驗
             self.track_pipeline_processes[source['name']].start()
 
         self.source_names = self.track_pipeline_processes.keys()
