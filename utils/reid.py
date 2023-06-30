@@ -94,7 +94,7 @@ class build_model(nn.Module):
                 continue
         print('Loading pretrained model from {}'.format(trained_path))
 
-class AsyncPredictor:
+class AsyncExtractor:
 
     class _StopToken:
         pass
@@ -108,21 +108,21 @@ class AsyncPredictor:
 
         @torch.no_grad()
         def run(self):
-            predictor = build_model(self.cfg)
-            predictor.load_param(self.cfg.param)
-            predictor.to(self.cfg.device)
-            predictor.eval()
+            extractor = build_model(self.cfg)
+            extractor.load_param(self.cfg.param)
+            extractor.to(self.cfg.device)
+            extractor.eval()
             self.out_queue.put("OK")
 
             while True:
                 task = self.in_queue.get()
-                if isinstance(task, AsyncPredictor._StopToken):
+                if isinstance(task, AsyncExtractor._StopToken):
                     break
                 idx, data = task
 
                 imgs_tensor = data.to(self.cfg.device).float()
                 # t0 = time.time()
-                result = predictor(imgs_tensor)
+                result = extractor(imgs_tensor)
                 # print('time: ', time.time() - t0)
                 self.out_queue.put((idx, result))
 
@@ -130,7 +130,7 @@ class AsyncPredictor:
         self.in_queue = mp.Queue(maxsize=10)
         self.out_queue = mp.Queue(maxsize=10)
 
-        self.procs = AsyncPredictor._PredictWorker(cfg, self.in_queue, self.out_queue)
+        self.procs = AsyncExtractor._PredictWorker(cfg, self.in_queue, self.out_queue)
         self.procs.start()
 
         self.img_transform = ImgTransform(cfg)

@@ -18,7 +18,7 @@ try:
 except RuntimeError:
     pass
 
-class Detect:
+class Detector:
     @torch.no_grad()
     def __init__(self, cfg):
         self.device = cfg.device
@@ -78,7 +78,7 @@ class Detect:
         return self._names
     
 
-class AsyncDetect:
+class AsyncDetector:
 
     class _DetectWorker(mp.Process):
         def __init__(self, in_queue, out_queue, cfg):
@@ -89,7 +89,7 @@ class AsyncDetect:
             self.out_queue = out_queue
 
         def run(self):
-            detect = Detect(self.cfg)
+            detector = Detector(self.cfg)
             self.out_queue.put("OK")
             while True:
                 idx, shm_name, batch_shape = self.in_queue.get()
@@ -98,25 +98,25 @@ class AsyncDetect:
                     break
                 shm = shared_memory.SharedMemory(name=shm_name)
                 im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
-                res = detect(im0s)
+                res = detector(im0s)
                 self.out_queue.put((idx, res))
                 shm.close()
 
     def __init__(self, cfg):
-        self.num_detect = len(cfg.device)
+        self.num_detector = len(cfg.device)
         self.batch_size = cfg.batch_size
         self.imgsz = cfg.imgsz
-        self.in_queue = mp.Queue(self.num_detect)
-        self.out_queue = mp.Queue(self.num_detect)
-        self.detects = []
+        self.in_queue = mp.Queue(self.num_detector)
+        self.out_queue = mp.Queue(self.num_detector)
+        self.detectors = []
         self.device = cfg.device
-        for i in range(self.num_detect):
+        for i in range(self.num_detector):
             cfg.device = self.device[i]
-            self.detects.append(self._DetectWorker(self.in_queue, self.out_queue, cfg))
-            self.detects[-1].start()
+            self.detectors.append(self._DetectWorker(self.in_queue, self.out_queue, cfg))
+            self.detectors[-1].start()
 
         # #  初始化
-        for _ in range(self.num_detect):
+        for _ in range(self.num_detector):
             _ = self.out_queue.get()
 
         # self.conut = 0
@@ -148,7 +148,7 @@ class AsyncDetect:
             out_queue.put((out_idx, res))
 
     def stop(self):
-        for _ in self.detects:
+        for _ in self.detectors:
             if self.in_queue.full():
                 self.in_queue.get()
             self.in_queue.put((StopToken(), None, None))

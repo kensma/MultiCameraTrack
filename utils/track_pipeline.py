@@ -1,7 +1,7 @@
 import threading
 import queue
 import time
-from yolov7.detect import Detect, AsyncDetect
+from yolov7.detect import AsyncDetector
 import numpy as np
 from tracker.basetrack.byte_tracker import BYTETracker
 from multiprocessing import shared_memory, Process, Queue, Value
@@ -75,7 +75,7 @@ class TrackPipelineProcess(Process):
         self.cfg = cfg
         self.batch_size = self.cfg.detector.batch_size
         self.source_name = source.name
-        self.result = Queue(self.cfg.detector.detect_queue_size*3) # 自少要有三倍的空間，不然會卡住
+        self.result = Queue(self.cfg.detector.detector_queue_size*3) # 自少要有三倍的空間，不然會卡住
         self.source = source
         # self.is_run = True
         self.smm_address = smm_address
@@ -87,7 +87,7 @@ class TrackPipelineProcess(Process):
         # self.locks = locks #平行化比較實驗
 
     def run(self):
-        batch_queue = queue.Queue(self.cfg.detector.detect_queue_size)
+        batch_queue = queue.Queue(self.cfg.detector.detector_queue_size)
         put_queue_thread = self.PutQueueThread(self.smm_address, batch_queue, self.is_run, self.batch_size, self.source, self.cfg.sourceType)
 
         tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
@@ -100,7 +100,7 @@ class TrackPipelineProcess(Process):
             # self.locks[0].release() #平行化比較實驗
 
             # self.locks[1].acquire() #平行化比較實驗
-            pred = AsyncDetect.predict(self.detect_in, self.detect_out, self.source_name, shm_name, batch_shape)
+            pred = AsyncDetector.predict(self.detect_in, self.detect_out, self.source_name, shm_name, batch_shape)
             # self.locks[1].release() #平行化比較實驗
 
             # self.locks[2].acquire() #平行化比較實驗

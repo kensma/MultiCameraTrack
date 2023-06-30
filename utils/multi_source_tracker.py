@@ -6,7 +6,7 @@ from collections import deque, defaultdict
 import cv2
 import os
 
-from utils.reid import AsyncPredictor
+from utils.reid import AsyncExtractor
 
 # '''測試'''
 # test_tansform = T.Compose([
@@ -136,8 +136,8 @@ class MultiSourceTracker:
         self.cfg = cfg
 
         # 初始化 reid
-        self.predictor = AsyncPredictor(reid_cfg)
-        self.img_transform = self.predictor.img_transform
+        self.extractor = AsyncExtractor(reid_cfg)
+        self.img_transform = self.extractor.img_transform
 
         self.frame_id  = 0
         self.count = 0
@@ -210,7 +210,7 @@ class MultiSourceTracker:
 
         if len(imgs):
             imgs_tensor = torch.stack(imgs)
-            features, _ = self.predictor(imgs_tensor)
+            features, _ = self.extractor(imgs_tensor)
             features = F.normalize(features)
             features = features.cpu()
 
@@ -423,5 +423,5 @@ class MultiSourceTracker:
         return res
     
     def stop(self):
-        # self.predictor.stop()
+        # self.extractor.stop()
         pass

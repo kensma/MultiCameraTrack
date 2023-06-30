@@ -12,7 +12,7 @@ from multiprocessing.managers import SharedMemoryManager
 from utils.track_pipeline import TrackPipelineProcess
 from utils.multi_source_tracker import MultiSourceTracker
 from utils.utils import CSVFile, StopToken
-from yolov7.detect import AsyncDetect
+from yolov7.detect import AsyncDetector
 
 
 class BaseMultiSourceTrackPipeline(threading.Thread):
@@ -21,7 +21,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.name = "MultiSourceTrackPipeline[{}]".format(self.name)
 
         # 初始化 detect
-        self.detect = AsyncDetect(cfg.detector)
+        self.detect = AsyncDetector(cfg.detector)
         self.detect_in = self.detect.in_queue
         self.detect_out = self.detect.out_queue
         self.batch_size = cfg.detector.batch_size
@@ -35,7 +35,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.smm.start()
 
         # 初始化 reid
-        # self.predictor = AsyncPredictor(cfg.reid)
+        # self.extractor = AsyncExtractor(cfg.reid)
 
         # 平行化比較實驗
         # locks = [Lock() for _ in range(3)]

@@ -1,12 +1,12 @@
 # import yaml
 # from attrdict import AttrDict
-# from utils.reid import AsyncPredictor, ImgTransform
+# from utils.reid import AsyncExtractor, ImgTransform
 # import torch
 # import numpy as np
 # import time
 # import random
 # from multiprocessing.managers import SharedMemoryManager
-# from yolov7.detect import Detect, AsyncDetect
+# from yolov7.detect import Detect, AsyncDetector
 # from utils.track_pipeline import TrackPipelineProcess
 
 # if __name__ == '__main__':
@@ -14,7 +14,7 @@
 #     cfg = AttrDict(config)
 
 #     # 初始化 detect
-#     detect = AsyncDetect(cfg.detector)
+#     detect = AsyncDetector(cfg.detector)
 #     detect_in = detect.in_queue
 #     detect_out = detect.out_queue
 #     # detect = None

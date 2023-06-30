@@ -19,8 +19,7 @@ detector:
   iou_thres: 0.45
   classes: [ 0 ]
   agnostic_nms: True
-  detect_queue_size: 9
-  num_detect: 1
+  detector_queue_size: 9
   names: classes.txt
 
 tracker:
