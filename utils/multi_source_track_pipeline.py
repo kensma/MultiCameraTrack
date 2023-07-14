@@ -6,12 +6,15 @@ import os
 import random
 import time
 import sys
+import cv2
+from vidgear.gears import WriteGear
+from collections import defaultdict
 from multiprocessing import shared_memory, Lock
 from multiprocessing.managers import SharedMemoryManager
 
 from utils.track_pipeline import TrackPipelineProcess
 from utils.multi_source_tracker import MultiSourceTracker
-from utils.utils import CSVFile, StopToken
+from utils.utils import CSVFile, StopToken, plot_one_box
 from yolov7.detect import AsyncDetector
 
 
@@ -46,6 +49,11 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             self.track_pipeline_processes[source['name']] = TrackPipelineProcess(cfg, self.smm_address, (self.detect_in, self.detect_out), source)
             # self.track_pipeline_processes[source['name']] = TrackPipelineProcess(cfg, self.smm_address, (self.detect_in, self.detect_out), source, locks) #平行化比較實驗
             self.track_pipeline_processes[source['name']].start()
+
+        self.source_param = {}
+        for name, track_pipeline in self.track_pipeline_processes.items():
+            fps, img_shape = track_pipeline.get_result()
+            self.source_param[name] = {"fps": fps, "img_shape": img_shape}
 
         self.source_names = self.track_pipeline_processes.keys()
         self.frame_id = 0
@@ -100,7 +108,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 shm.unlink()
 
         self.detect.stop()
-        self.smm.shutdown()        
+        self.smm.shutdown()
         print("MultiSourceTrackPipeline stop")
 
     def stop(self):
@@ -124,7 +132,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
 class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
     class FileWriter(threading.Thread):
-        def __init__(self, name, track_pipeline, save_target, save_pred, save_video, plot_result=False, line_thickness=1):
+        def __init__(self, name, source_param, save_target, save_pred, save_video, plot_result=False, line_thickness=1):
             threading.Thread.__init__(self)
             self.name = "FileWriter[{}]".format(name)
             self.updata_queue = queue.Queue(128)
@@ -139,13 +147,13 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.line_thickness = line_thickness
 
 
-            # self.video_params = {
-            #         "-input_framerate": track_pipeline.fps,
-            #         "-output_dimensions": track_pipeline.img_shape,
-            #         # "-b:v": "1000k",
-            #         # "-maxrate": "2000k",
-            #         # "-bufsize": "2000k"
-            # }
+            self.video_params = {
+                    "-input_framerate": source_param["fps"],
+                    "-output_dimensions": source_param["img_shape"],
+                    # "-b:v": "1000k",
+                    # "-maxrate": "2000k",
+                    # "-bufsize": "2000k"
+            }
 
 
         def run(self):
@@ -165,16 +173,21 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
                         line = [frame_id, *target]
                         self.target_file.write(line)
 
-                # if self.save_video:
-                #     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                #     if self.plot_result:
-                #         for *xyxy, conf, cls, track_id, match_id, match_conf in targets:
-                #             label = f'{names[int(cls)]}  {int(track_id)}  {conf:.2f} #{match_id}'
-                #             if isinstance(match_conf, float):
-                #                 label += f' {match_conf:.4f}'
-                #             plot_one_box(xyxy, img, label=label, color=colors[int(cls)], line_thickness=self.line_thickness)
+                if self.save_video:
+                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    if self.plot_result:
+                        cv2.putText(img, str(frame_id), (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 112, 0), 3, cv2.LINE_AA)
+                        for *xyxy, conf, cls, track_id, match_id, match_conf in targets:
+                            label = f'{names[int(cls)]}  {int(track_id)}  {conf:.2f}'
+                            color = [226,228,229]
+                            if isinstance(match_id, int):
+                                label += f' #{match_id}'
+                                color = colors[int(match_id)]
+                                if isinstance(match_conf, float):
+                                    label += f' {match_conf:.4f}'
+                            plot_one_box(xyxy, img, label=label, color=color, line_thickness=3)
             
-                #     self.video_writer.write(img)
+                    self.video_writer.write(img)
             self.close_file()
             print(f'{self.name} FileWriter stop')
 
@@ -188,10 +201,10 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             self.close_file()
             self.is_open_file = True
 
-            # if self.save_video:
-            #     video_file_name = f'{self.source_name}.mp4'
-            #     video_path = os.path.join(self.save_path, video_file_name)
-            #     self.video_writer = WriteGear(video_path, compression_mode = True, **self.video_params)
+            if self.save_video:
+                video_file_name = f'{self.source_name}.mp4'
+                video_path = os.path.join(self.save_path, video_file_name)
+                self.video_writer = WriteGear(video_path, compression_mode = True, **self.video_params)
 
             if self.save_pred:
                 self.pred_file = CSVFile(self.save_path, f'{self.source_name}_pred.csv')
@@ -202,8 +215,8 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
         def close_file(self):
             if self.is_open_file:
                 self.frame_id = 0
-                # if self.save_video:
-                #     self.video_writer.close()
+                if self.save_video:
+                    self.video_writer.close()
                 if self.save_pred:
                     self.pred_file.close()
                 if self.save_target:
@@ -234,21 +247,15 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
             global names, colors
             with open(cfg.detector.names, newline='') as f:
                 names = f.read().split('\n')
-            colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
+            colors = defaultdict(lambda :[random.randint(0, 255) for _ in range(3)])
 
             self.writers = {}
             for key, value in self.track_pipeline_processes.items():
-                self.writers[key] = self.FileWriter(key, value, self.save_target, self.save_pred, self.save_video, self.plot_result, self.plot_line_thickness)
+                self.writers[key] = self.FileWriter(key, self.source_param[key], self.save_target, self.save_pred, self.save_video, self.plot_result, self.plot_line_thickness)
                 self.writers[key].start()
-
-    # def get_datetime(self):
-    #     # return datetime.now().strftime("%Y-%m-%d_%H-%M")
-    #     return datetime.now().strftime("%Y-%m-%d")
 
     def process_result(self, res):
         if self.save_result:
-            # datetime = self.get_datetime()
-            # self.save_path = os.path.join(self.save_root_path, datetime)
             self.save_path = self.save_root_path
             if not os.path.isdir(self.save_path):
                 os.mkdir(self.save_path)

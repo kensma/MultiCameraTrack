@@ -11,7 +11,7 @@ from yolov7.utils.datasets import letterbox
 from yolov7.utils.general import scale_coords, non_max_suppression, check_img_size
 from yolov7.models.experimental import attempt_load
 from yolov7.utils.torch_utils import TracedModel
-from utils.utils import StopToken
+from utils.utils import StopToken, close_sharedMemory
 
 try:
     mp.set_start_method('spawn')
@@ -94,7 +94,7 @@ class AsyncDetector:
             while True:
                 idx, shm_name, batch_shape = self.in_queue.get()
                 if isinstance(idx, StopToken):
-                    shm.unlink()
+                    # shm.unlink()
                     break
                 shm = shared_memory.SharedMemory(name=shm_name)
                 im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
@@ -118,24 +118,6 @@ class AsyncDetector:
         # #  初始化
         for _ in range(self.num_detector):
             _ = self.out_queue.get()
-
-        # self.conut = 0
-
-    # def put(self, key, shm_name, batch_shape):
-    #     self.in_queue.put((key, shm_name, batch_shape))
-
-    # def get(self, key):
-    #     while True:
-    #         out_key, res = self.out_queue.get()
-    #         if out_key == key:
-    #             return res
-    #         self.in_queue.put((out_key, res))
-
-    # def __call__(self, shm_name, batch_shape):
-    #     self.conut += 1
-    #     key = self.conut
-    #     self.put(key, shm_name, batch_shape)
-    #     return self.get(key)
 
     @staticmethod
     def predict(in_queue, out_queue, idx, shm_name, batch_shape):

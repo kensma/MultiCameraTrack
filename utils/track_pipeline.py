@@ -10,7 +10,7 @@ from functools import reduce
 import sys
 
 from utils.data_loader import LoadVideo, LoadWebcam, LoadImage
-from utils.utils import StopToken
+from utils.utils import StopToken, close_sharedMemory
 
 
 class TrackPipelineProcess(Process):
@@ -42,7 +42,6 @@ class TrackPipelineProcess(Process):
 
             self.start()
 
-
         def run(self):
             conut = 0
             shm = self.smm.SharedMemory(size=self.buf_size)
@@ -65,6 +64,7 @@ class TrackPipelineProcess(Process):
             shm.close()
             shm.unlink()
             self.load_data.stop()
+            self.batch_queue.put((StopToken(), None))
             
 
     #平行化比較實驗
@@ -89,12 +89,16 @@ class TrackPipelineProcess(Process):
     def run(self):
         batch_queue = queue.Queue(self.cfg.detector.detector_queue_size)
         put_queue_thread = self.PutQueueThread(self.smm_address, batch_queue, self.is_run, self.batch_size, self.source, self.cfg.sourceType)
+        
+        self.result.put((put_queue_thread.load_data.get_fps(), put_queue_thread.load_data.get_shape()))
 
         tracker = BYTETracker(self.cfg.tracker, frame_rate=int(put_queue_thread.load_data.get_fps()))
         conut = 0
         while self.is_run.value:
             # self.locks[0].acquire() #平行化比較實驗
             shm_name, batch_shape = batch_queue.get()
+            if isinstance(shm_name, StopToken):
+                break
             shm = shared_memory.SharedMemory(name=shm_name)
             im0s = np.ndarray(batch_shape, dtype=np.uint8, buffer=shm.buf)
             # self.locks[0].release() #平行化比較實驗
@@ -116,9 +120,15 @@ class TrackPipelineProcess(Process):
             
             shm.close()
 
-        batch_queue.get()
         while not self.result.empty():
-            self.result.get()
+            shm_data, _, _ = self.result.get()
+            shm_name, _ = shm_data
+            close_sharedMemory(shm_name)
+        while not batch_queue.empty():
+            shm_name, _ = batch_queue.get()
+            if isinstance(shm_name, StopToken):
+                break
+            close_sharedMemory(shm_name)
         self.result.close()
         self.result.join_thread()
         print(f"{self.source_name} TrackPipelineProcess stop")
@@ -128,4 +138,7 @@ class TrackPipelineProcess(Process):
 
     def stop(self):
         self.is_run.value = False
-        self.result.get()
+        if not self.result.empty():
+            shm_data, _, _ = self.result.get()
+            shm_name, _ = shm_data
+            close_sharedMemory(shm_name)
