@@ -8,11 +8,6 @@ import os
 
 from utils.reid import AsyncExtractor
 
-# '''測試'''
-# test_tansform = T.Compose([
-#     T.ToPILImage(),
-# ])
-
 class TargetState(object):
     New = 0
     Match = 1
@@ -41,6 +36,19 @@ class TargetNode:
         self.mtarget = MTargetNode(mtarget_id, self)
         self.match_conf = None
 
+        # 之前匹配過的target
+        self.matched = defaultdict(set)
+    
+    def matched_clear(self):
+        self.matched = defaultdict(set)
+
+    def matched_add(self, tracks):
+        for track in tracks:
+            self.matched[track[0]].add(track[1])
+
+    def is_matched(self, cam, track_id):
+        return track_id in self.matched[cam]
+
     def update_state(self, state):
         self.state = state
         if state == TargetState.Match:
@@ -49,6 +57,7 @@ class TargetNode:
             pass
 
     def update_feature_img(self, img, conf, feature, replace=None):
+        self.matched_clear()
         if replace == None:
             self.feature.append(feature)
             self.conf.append(conf)
@@ -60,8 +69,6 @@ class TargetNode:
 
         if len(self.feature) == self.max_feature:
             self.mean_feature = torch.mean(torch.stack(list(self.feature)), dim=0)
-            # self.mean_feature = torch.median(torch.stack(list(self.feature)), dim=0).values
-            # self.mtarget.update_feature(self)
         
 
 
@@ -86,48 +93,28 @@ class MTargetNode:
         self.match_dict[target.origin] = target
         self.match_count = 1
         self.is_match = False
-        self.lost_features = []
-        # self.features = defaultdict(dict)
-        # self.mean_feature = None
 
-    def match(self, target_node, frame_id, match_conf=None):
+        self.last_lost_target = None
+
+    def match(self, target_node, match_conf=None):
         if target_node.state == TargetState.Match:
             target_node.mtarget.unmatch(target_node, roll_back=True)
         self.match_dict[target_node.origin] = target_node
         self.match_count += 1
-        if self.match_count >= 2:
+        if (self.last_lost_target != None and self.match_count >= 1) or (self.last_lost_target == None and self.match_count > 1):
             self.is_match = True
         target_node.mtarget = self
         target_node.match_conf = match_conf if match_conf != None else target_node.match_conf
         target_node.update_state(TargetState.Match)
-        # self.update_feature(target_node)
 
     def unmatch(self, target_node, roll_back=False):
         self.match_dict[target_node.origin] = None
         self.match_count -= 1
-        if self.match_count < 2:
+        if (self.last_lost_target != None and self.match_count < 1) or (self.last_lost_target == None and self.match_count <= 1):
             self.is_match = False
-        
-        if not self.match_count == 1 and roll_back:
-            for target in self.match_dict.values():
-                if target != None:
-                    target.update_state(TargetState.Lost)
-                    # del self.features[target.origin][target.track_id]
-                    # self.generate_mean_feature()
-        
-        if not roll_back:
-            self.lost_features.append(target_node.mean_feature)
-    
-    # def update_feature(self, target_node):
-    #     self.features[target_node.origin][target_node.track_id] = target_node.mean_feature
-    #     self.generate_mean_feature()
 
-    # def generate_mean_feature(self):
-    #     features = []
-    #     for source_features in self.features.values():
-    #         for feature in source_features.values():
-    #             features.append(feature)
-    #     self.mean_feature = torch.mean(torch.stack(features), dim=0)
+        if self.match_count == 0 and not roll_back:
+            self.last_lost_target = target_node
 
 class MultiSourceTracker:
     @torch.no_grad()
@@ -149,7 +136,7 @@ class MultiSourceTracker:
         self.max_feature = self.cfg.max_feature # 最多特徵數
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
-        self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id
+        self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id，index越大越久前丟失
         self.source_match_list = {x:set() for x in self.source_names} # 用來存放每個source的匹配list
 
         self.area_match = defaultdict(set)
@@ -225,7 +212,8 @@ class MultiSourceTracker:
         for source_name, track_id in self.target_lost_deque[self.min_match_lost]:
             target = self.target_pool[source_name][track_id]
             if target.state == TargetState.Lost:
-                if target.mtarget.is_match:
+                # 在重疊區域內被匹配後消失並且還有同一個target在不同相機內,不應該再被匹配
+                if target.mtarget.match_count > 1:
                     del self.target_pool[source_name][track_id]
                     self.target_lost_deque[self.min_match_lost].remove((source_name, track_id))
                 else:
@@ -254,6 +242,8 @@ class MultiSourceTracker:
             area_features, area_info = self.get_area_feature(source_name, track_id) # 重疊區域匹配
             # area_features, area_info = [], []
 
+            self.target_pool[source_name][track_id].matched_add(lost_info)
+
             if not len(lost_info) and not len(area_info):
                 continue
 
@@ -280,7 +270,7 @@ class MultiSourceTracker:
             #         s, t = lost_info[index]
             #         mtarget = self.target_pool[s][t].mtarget
             #         self.target_pool[s][t].update_state(TargetState.Match)
-            #         mtarget.match(self.target_pool[source_name][track_id], self.frame_id, distmat[index])
+            #         mtarget.match(self.target_pool[source_name][track_id] distmat[index])
             #     # 重疊區域匹配
             #     else:
             #         s, t = area_info[index-len(lost_info)]
@@ -295,7 +285,7 @@ class MultiSourceTracker:
             #         mtarget = t1.mtarget
 
             #         t1.update_state(TargetState.Match)
-            #         mtarget.match(t2, self.frame_id, distmat[index])
+            #         mtarget.match(t2, distmat[index])
             # '''餘弦距離結果合併實驗 end'''
         
         if len(distmats):
@@ -324,7 +314,7 @@ class MultiSourceTracker:
 
                     mtarget = self.target_pool[s][t].mtarget
                     self.target_pool[s][t].update_state(TargetState.Match)
-                    mtarget.match(self.target_pool[q_source_name][q_track_id], self.frame_id, distmat_matrix[index])
+                    mtarget.match(self.target_pool[q_source_name][q_track_id], distmat_matrix[index])
 
                 # 重疊區域匹配
                 else:
@@ -348,7 +338,7 @@ class MultiSourceTracker:
                     mtarget = t1.mtarget
 
                     t1.update_state(TargetState.Match)
-                    mtarget.match(t2, self.frame_id, distmat_matrix[index])
+                    mtarget.match(t2, distmat_matrix[index])
 
                 temp_match[s].add(t)
                 distmat_matrix[r, :] = self.match_thres + 1
@@ -365,16 +355,20 @@ class MultiSourceTracker:
     def get_lost_feature(self, source_name, track_id):
         features = []
         feature_info = [] # 用來存放比較的target
-        if self.target_pool[source_name][track_id].state == TargetState.New:
+        target = self.target_pool[source_name][track_id]
+        if target.state == TargetState.New:
             for s, t in self.source_match_list[source_name]:
                 # 需要是Lost狀態
                 if self.target_pool[s][t].state != TargetState.Lost:
                     continue
                 # 需要lost時間比query出現的時間早
-                if self.target_pool[s][t].frame_id > self.target_pool[source_name][track_id].fast_frame_id:
+                if self.target_pool[s][t].frame_id > target.fast_frame_id:
                     continue
                 # 需要有足夠的特徵
                 if len(self.target_pool[s][t].feature) < self.max_feature:
+                    continue
+                # 之前沒有匹配過
+                if target.is_matched(s, t):
                     continue
                 features.append(self.target_pool[s][t].mean_feature)
                 feature_info.append((s, t))
@@ -389,7 +383,7 @@ class MultiSourceTracker:
             if target.mtarget.match_dict[s] == None: # 限制在同一個相機只能匹配一次
                 for t_id, t in self.target_pool[s].items():
                     if t.state != TargetState.Lost:
-                        if self.target_pool[s][t_id].mtarget.is_match:
+                        if self.target_pool[s][t_id].mtarget.match_dict[source_name] != None: # 這個target不應該在這個相機內匹配
                             continue
                         # 需要有足夠的特徵
                         if len(self.target_pool[s][t_id].feature) < self.max_feature:
