@@ -19,6 +19,7 @@ class TargetNode:
         self.cls = cls
         self.track_id = track_id
         self.fast_frame_id = frame_id
+        self.lost_frame_id = -1
         self.frame_id = frame_id
         self.xyxy = xyxy
 
@@ -49,12 +50,14 @@ class TargetNode:
     def is_matched(self, cam, track_id):
         return track_id in self.matched[cam]
 
-    def update_state(self, state):
+    def update_state(self, state, frame_id=-1):
         self.state = state
         if state == TargetState.Match:
-            pass
+            self.lost_frame_id = -1
         elif state == TargetState.Lost:
-            pass
+            self.lost_frame_id = frame_id
+        elif state == TargetState.New:
+            self.lost_frame_id = -1
 
     def update_feature_img(self, img, conf, feature, replace=None):
         self.matched_clear()
@@ -206,7 +209,7 @@ class MultiSourceTracker:
 
         '''更新Lost target state'''
         for source_name, track_id in self.target_lost_deque[1]:
-            self.target_pool[source_name][track_id].update_state(TargetState.Lost)
+            self.target_pool[source_name][track_id].update_state(TargetState.Lost, self.frame_id)
 
         '''更新匹配list'''
         for source_name, track_id in self.target_lost_deque[self.min_match_lost]:
@@ -336,9 +339,23 @@ class MultiSourceTracker:
 
                     t1, t2 = (m_target, q_target) if reverse else (q_target, m_target)
                     mtarget = t1.mtarget
+                    mtarget2 = t2.mtarget
 
                     t1.update_state(TargetState.Match)
                     mtarget.match(t2, distmat_matrix[index])
+
+                    # 如果t2之前重疊區域匹配過,則t2的重疊區域匹配改成匹配t1的mtarget(這裡可能需要修改邏輯，但我懶得想了)
+                    if mtarget2.match_count >= 1:
+                        for t in mtarget2.match_dict.values():
+                            if t != None:
+                                mtarget.match(t)
+                    
+                    # 回收t2的mtarget
+                    if mtarget2.last_lost_target != None and self.frame_id - mtarget2.last_lost_target.lost_frame_id > self.max_target_lost:
+                        # TODO 加入距離匹配
+                        for s in self.source_names:
+                            self.add_match_list(mtarget2.last_lost_target.origin, mtarget2.last_lost_target.track_id, s)
+
 
                 temp_match[s].add(t)
                 distmat_matrix[r, :] = self.match_thres + 1
