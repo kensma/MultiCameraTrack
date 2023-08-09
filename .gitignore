@@ -273,3 +273,5 @@ run/*
 test/*
 
 weights/*
+
+*.yaml

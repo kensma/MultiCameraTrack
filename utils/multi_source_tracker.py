@@ -137,6 +137,7 @@ class MultiSourceTracker:
         self.areas = self.cfg.areas # 重疊區域
         self.min_frame_feature = self.cfg.min_frame_feature # 最少出現幀數
         self.max_feature = self.cfg.max_feature # 最多特徵數
+        # self.max_feature = 1 # 取特徵平均實驗
 
         self.target_pool = {x:{} for x in self.source_names} # 用來存放target
         self.target_lost_deque = deque([[] for _ in range(self.max_target_lost)], maxlen=self.max_target_lost) # 用來存放丟失target的source, track_id，index越大越久前丟失
@@ -175,7 +176,7 @@ class MultiSourceTracker:
                     in_border = img.shape[0] < xyxy[3] or img.shape[1] < xyxy[2] or in_border
                     # 前幾幀不做feature、當xyxy有負值(在邊界)不做feature
                     if self.frame_id - self.target_pool[source_name][track_id].fast_frame_id > self.min_frame_feature and not in_border:
-                    #人物完整性實驗
+                    # '''人物完整性實驗'''
                     # if True:
                     #     xyxy = list(map(lambda x: 0 if x < 0 else x, xyxy ))
                         if len(self.target_pool[source_name][track_id].conf) < self.max_feature:
@@ -273,7 +274,7 @@ class MultiSourceTracker:
             #         s, t = lost_info[index]
             #         mtarget = self.target_pool[s][t].mtarget
             #         self.target_pool[s][t].update_state(TargetState.Match)
-            #         mtarget.match(self.target_pool[source_name][track_id] distmat[index])
+            #         mtarget.match(self.target_pool[source_name][track_id], distmat[index])
             #     # 重疊區域匹配
             #     else:
             #         s, t = area_info[index-len(lost_info)]
@@ -286,9 +287,22 @@ class MultiSourceTracker:
             #             reverse = False
             #         t1, t2 = (m_target, q_target) if reverse else (q_target, m_target)
             #         mtarget = t1.mtarget
+            #         mtarget2 = t2.mtarget
 
             #         t1.update_state(TargetState.Match)
             #         mtarget.match(t2, distmat[index])
+
+            #         # 如果t2之前重疊區域匹配過,則t2的重疊區域匹配改成匹配t1的mtarget(這裡可能需要修改邏輯，但我懶得想了)
+            #         if mtarget2.match_count >= 1:
+            #             for t in mtarget2.match_dict.values():
+            #                 if t != None:
+            #                     mtarget.match(t)
+                    
+            #         # 回收t2的mtarget
+            #         if mtarget2.last_lost_target != None and self.frame_id - mtarget2.last_lost_target.lost_frame_id < self.max_target_lost:
+            #             # TODO 加入距離匹配
+            #             for s in self.source_names:
+            #                 self.add_match_list(mtarget2.last_lost_target.origin, mtarget2.last_lost_target.track_id, s)
             # '''餘弦距離結果合併實驗 end'''
         
         if len(distmats):
@@ -351,11 +365,10 @@ class MultiSourceTracker:
                                 mtarget.match(t)
                     
                     # 回收t2的mtarget
-                    if mtarget2.last_lost_target != None and self.frame_id - mtarget2.last_lost_target.lost_frame_id > self.max_target_lost:
+                    if mtarget2.last_lost_target != None and self.frame_id - mtarget2.last_lost_target.lost_frame_id < self.max_target_lost:
                         # TODO 加入距離匹配
                         for s in self.source_names:
                             self.add_match_list(mtarget2.last_lost_target.origin, mtarget2.last_lost_target.track_id, s)
-
 
                 temp_match[s].add(t)
                 distmat_matrix[r, :] = self.match_thres + 1

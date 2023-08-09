@@ -1,0 +1,2 @@
+config_files : [ 'inference_cfg.yaml' ]
+save_dir_name_end : ''

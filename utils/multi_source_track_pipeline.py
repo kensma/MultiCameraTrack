@@ -78,8 +78,9 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 (shm_name, batch_shape), preds[name], tracks[name]  = track_result
                 shms[name] = shared_memory.SharedMemory(name=shm_name)
                 im0s[name] = np.ndarray(batch_shape, dtype=np.uint8, buffer=shms[name].buf)
-
             for i in range(self.batch_size):
+                if isinstance(track_result, StopToken):
+                    break
                 self.frame_id += 1
                 if self.max_frame_id != -1 and self.frame_id > self.max_frame_id:
                     self.tolal_time = time.time() - t0
@@ -107,21 +108,23 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 shm.close()
                 shm.unlink()
 
+        
+        for track_pipeline in self.track_pipeline_processes.values():
+            track_pipeline.join()
         self.detect.stop()
         self.smm.shutdown()
         print("MultiSourceTrackPipeline stop")
 
     def stop(self):
+        self.is_run = False
         for track_pipeline in self.track_pipeline_processes.values():
             if track_pipeline.result.empty():
                 track_pipeline.result.put(StopToken())
         for track_pipeline in self.track_pipeline_processes.values():
             track_pipeline.stop()
-        for track_pipeline in self.track_pipeline_processes.values():
-            track_pipeline.join()
 
         self.multi_source_tracker.stop()
-        self.is_run = False
+        # self.is_run = False
 
     def process_result(self, res):
         raise NotImplementedError

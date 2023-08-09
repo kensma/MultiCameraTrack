@@ -121,16 +121,19 @@ class TrackPipelineProcess(Process):
             shm.close()
 
         while not self.result.empty():
-            shm_data, _, _ = self.result.get()
+            temp = self.result.get()
+            if isinstance(temp, StopToken):
+                break
+            shm_data, _, _ = temp
             shm_name, _ = shm_data
             close_sharedMemory(shm_name)
+        self.result.close()
+        self.result.join_thread()
         while not batch_queue.empty():
             shm_name, _ = batch_queue.get()
             if isinstance(shm_name, StopToken):
                 break
             close_sharedMemory(shm_name)
-        self.result.close()
-        self.result.join_thread()
         print(f"{self.source_name} TrackPipelineProcess stop")
 
     def get_result(self):
@@ -138,7 +141,3 @@ class TrackPipelineProcess(Process):
 
     def stop(self):
         self.is_run.value = False
-        if not self.result.empty():
-            shm_data, _, _ = self.result.get()
-            shm_name, _ = shm_data
-            close_sharedMemory(shm_name)
