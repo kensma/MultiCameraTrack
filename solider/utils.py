@@ -25,7 +25,6 @@ import math
 import random
 import datetime
 import subprocess
-import faiss
 from collections import defaultdict, deque
 
 import numpy as np

@@ -1,0 +1,8 @@
+PyYAML==6.0
+tqdm==4.64.0
+attrdict==2.0.1
+torch==1.13.1+cu117
+numpy==1.23.3
+torchvision==0.14.1+cu117
+opencv-python==4.7.0.68
+scikit-learn==1.0.2

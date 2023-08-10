@@ -119,7 +119,7 @@ class MTargetNode:
         if self.match_count == 0 and not roll_back:
             self.last_lost_target = target_node
 
-class MultiSourceTracker:
+class MultiCameraTracker:
     @torch.no_grad()
     def __init__(self, cfg, reid_cfg, source_names):
         self.source_names = source_names

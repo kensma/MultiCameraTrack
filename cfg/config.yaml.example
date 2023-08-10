@@ -36,7 +36,7 @@ reid:
   pixel_mean: [ 0.5, 0.5, 0.5 ]
   pixel_std: [ 0.5, 0.5, 0.5 ]
 
-MultiSourceTracker:
+MultiCameraTracker:
   max_target_lost: 300
   min_match_lost: 30
   match_thres: 0.08

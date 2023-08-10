@@ -13,15 +13,15 @@ from multiprocessing import shared_memory, Lock
 from multiprocessing.managers import SharedMemoryManager
 
 from utils.track_pipeline import TrackPipelineProcess
-from utils.multi_source_tracker import MultiSourceTracker
+from utils.multi_camera_tracker import MultiCameraTracker
 from utils.utils import CSVFile, StopToken, plot_one_box
 from yolov7.detect import AsyncDetector
 
 
-class BaseMultiSourceTrackPipeline(threading.Thread):
+class BaseMultiCameraTrackPipeline(threading.Thread):
     def __init__(self, cfg):
         threading.Thread.__init__(self)
-        self.name = "MultiSourceTrackPipeline[{}]".format(self.name)
+        self.name = "MultiCameraTrackPipeline[{}]".format(self.name)
 
         # 初始化 detect
         self.detect = AsyncDetector(cfg.detector)
@@ -58,12 +58,12 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         self.source_names = self.track_pipeline_processes.keys()
         self.frame_id = 0
         self.tolal_time = 0
-        self.max_frame_id = cfg.MultiSourceTracker.max_frame
+        self.max_frame_id = cfg.MultiCameraTracker.max_frame
 
         self.is_run = True
 
-        # 初始化 multi_source_tracker
-        self.multi_source_tracker = MultiSourceTracker(cfg.MultiSourceTracker, cfg.reid, self.source_names)
+        # 初始化 multi_camera_tracker
+        self.multi_camera_tracker = MultiCameraTracker(cfg.MultiCameraTracker, cfg.reid, self.source_names)
     def run(self):
         t0 = time.time()
         while self.is_run:
@@ -92,7 +92,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
                 for name in self.source_names:
                     temp[name] = (im0s[name][i], tracks[name][i])
 
-                multi_result = self.multi_source_tracker.update(temp)
+                multi_result = self.multi_camera_tracker.update(temp)
 
                 for name in self.source_names:
                     res[name] = (im0s[name][i].copy(), preds[name][i], multi_result[name])
@@ -113,7 +113,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
             track_pipeline.join()
         self.detect.stop()
         self.smm.shutdown()
-        print("MultiSourceTrackPipeline stop")
+        print("MultiCameraTrackPipeline stop")
 
     def stop(self):
         self.is_run = False
@@ -123,7 +123,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
         for track_pipeline in self.track_pipeline_processes.values():
             track_pipeline.stop()
 
-        self.multi_source_tracker.stop()
+        self.multi_camera_tracker.stop()
         # self.is_run = False
 
     def process_result(self, res):
@@ -132,7 +132,7 @@ class BaseMultiSourceTrackPipeline(threading.Thread):
     def get_result(self):
         raise NotImplementedError
 
-class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
+class MultiCameraTrackPipeline(BaseMultiCameraTrackPipeline):
 
     class FileWriter(threading.Thread):
         def __init__(self, name, source_param, save_target, save_pred, save_video, plot_result=False, line_thickness=1):
@@ -235,16 +235,16 @@ class MultiSourceTrackPipeline(BaseMultiSourceTrackPipeline):
 
         self.return_queues = {x: queue.Queue(64) for x in self.source_names}
 
-        self.save_target = cfg.MultiSourceTracker.save_target
-        self.save_pred = cfg.MultiSourceTracker.save_pred
-        self.save_video = cfg.MultiSourceTracker.save_video
+        self.save_target = cfg.MultiCameraTracker.save_target
+        self.save_pred = cfg.MultiCameraTracker.save_pred
+        self.save_video = cfg.MultiCameraTracker.save_video
 
-        self.plot_result =  cfg.MultiSourceTracker.plot_result
-        self.plot_line_thickness = cfg.MultiSourceTracker.plot_line_thickness
+        self.plot_result =  cfg.MultiCameraTracker.plot_result
+        self.plot_line_thickness = cfg.MultiCameraTracker.plot_line_thickness
 
         self.save_result = self.save_target or self.save_pred or self.save_video
         if self.save_result:
-            self.save_root_path = cfg.MultiSourceTracker.save_root_path
+            self.save_root_path = cfg.MultiCameraTracker.save_root_path
 
             random.seed(10)
             global names, colors
